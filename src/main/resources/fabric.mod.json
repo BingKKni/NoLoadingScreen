@@ -1,0 +1,45 @@
+{
+	"schemaVersion": 1,
+	"id": "noloadingscreen",
+	"version": "${version}",
+	"name": "NoLoadingScreen",
+	"description": "Removes the loading screens from joining a world. \"Loading terrain\" and \"Reconfiguring\" are replaced by the world itself — or, while none exists yet, by a void with a free camera — so a join is something to look at rather than a panel to sit through. No packet is created, delayed or reordered.",
+	"authors": [
+		{
+			"name": "小布丁 (BingKKni)",
+			"contact": {
+				"homepage": "https://github.com/BingKKni"
+			}
+		}
+	],
+	"contact": {
+		"homepage": "https://github.com/BingKKni/NoLoadingScreen",
+		"issues": "https://github.com/BingKKni/NoLoadingScreen/issues",
+		"sources": "https://github.com/BingKKni/NoLoadingScreen"
+	},
+	"license": "MIT",
+	"icon": "assets/noloadingscreen/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"io.github.bingkkni.noloadingscreen.NoLoadingScreen"
+		],
+		"modmenu": [
+			"io.github.bingkkni.noloadingscreen.compat.ModMenuIntegration"
+		]
+	},
+	"mixins": [
+		{
+			"config": "noloadingscreen.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~26.2",
+		"java": ">=25"
+	},
+	"suggests": {
+		"modmenu": "*"
+	}
+}

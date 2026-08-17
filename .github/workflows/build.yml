@@ -1,0 +1,46 @@
+# Builds every push and pull request, so a broken commit is caught before anyone
+# downloads a jar from it.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: validate gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: setup jdk
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+
+      # Caches the Gradle dependency cache, which matters here because Loom pulls
+      # down the ~39 MB Minecraft client jar plus its libraries on a cold run.
+      - name: setup gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: make gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: build
+        run: ./gradlew build --stacktrace
+
+      - name: capture build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: noloadingscreen-dev-build
+          path: build/libs/
+          if-no-files-found: error

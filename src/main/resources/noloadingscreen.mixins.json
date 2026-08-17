@@ -1,0 +1,22 @@
+{
+	"required": true,
+	"package": "io.github.bingkkni.noloadingscreen.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"ClientCommonPacketListenerImplAccessor",
+		"ClientPacketListenerMixin",
+		"GuiMixin",
+		"HudMixin",
+		"LevelLoadTrackerMixin",
+		"LevelLoadingScreenAccessor",
+		"LocalPlayerMixin",
+		"MinecraftMixin",
+		"ServerReconfigScreenAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}
