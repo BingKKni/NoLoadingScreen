@@ -1,5 +1,9 @@
 # NoLoadingScreen（NLS，无加载页面）
 
+<p align="center">
+  <img src="src/main/resources/assets/noloadingscreen/icon.png" alt="NoLoadingScreen 图标" width="128">
+</p>
+
 [English](README.md) | **简体中文**
 
 [![build](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml/badge.svg)](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml)
