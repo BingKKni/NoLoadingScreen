@@ -10,6 +10,9 @@ public final class LoaderServices {
 
 	public static String sodiumFluidRenderer() { return "net.caffeinemc.mods.sodium.fabric.render.FluidRendererImpl"; }
 
+	/** Vanilla queues early local handshakes; loaders with a startup login gate must opt out. */
+	public static boolean allowsEarlyLocalConnection() { return true; }
+
 	public static Path configDirectory() {
 		return FabricLoader.getInstance().getConfigDir();
 	}

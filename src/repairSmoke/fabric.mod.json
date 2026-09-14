@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "nls_repair_smoke",
+  "version": "1.0.0",
+  "environment": "client",
+  "mixins": ["noloadingscreen.repair-smoke.mixins.json"]
+}

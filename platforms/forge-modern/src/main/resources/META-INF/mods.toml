@@ -1,0 +1,28 @@
+modLoader="javafml"
+loaderVersion="[${forgeMajor},)"
+license="MIT"
+issueTrackerURL="https://github.com/BingKKni/NoLoadingScreen/issues"
+clientSideOnly=true
+
+[[mods]]
+modId="noloadingscreen"
+version="${version}"
+displayName="NoLoadingScreen"
+displayURL="https://github.com/BingKKni/NoLoadingScreen"
+logoFile="assets/noloadingscreen/icon.png"
+authors="BingKKni"
+description='''Replaces loading screens with a world view or a free camera while joining. No protocol packet is fabricated, dropped or reordered; loading-time packet handling is spread across frames.'''
+
+[[dependencies.noloadingscreen]]
+modId="forge"
+mandatory=true
+versionRange="[${forgeVersion},${forgeMajor.toInteger() + 1})"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.noloadingscreen]]
+modId="minecraft"
+mandatory=true
+versionRange="[${minecraftVersion}]"
+ordering="NONE"
+side="CLIENT"

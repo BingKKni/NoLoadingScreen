@@ -1,0 +1,83 @@
+ext.loaderName = 'NeoForge'
+ext.sourceLayers = [
+    fileTree('src/main/java'),
+    fileTree('../neoforge-modern/src/main/java'),
+    fileTree('../neoforge-common/src/main/java') {
+        include '**/platform/NeoForgeBootstrap.java', '**/platform/LoaderServices.java', '**/PlayAddonGuard.java'
+    },
+    fileTree(apiSourceRoot + '/main/java') {
+        exclude '**/platform/FabricBootstrap.java', '**/compat/ModMenuIntegration.java'
+    },
+    fileTree('../../src/main/java') {
+        exclude '**/platform/FabricBootstrap.java', '**/compat/ModMenuIntegration.java'
+    }
+]
+apply from: '../modern-common.gradle'
+neoForge {
+    version = neoForgeVersion
+    mods { noloadingscreen { sourceSet sourceSets.main } }
+}
+sourceSets.main.resources.srcDir '../neoforge-common/src/main/resources'
+// Select the API-family hook inventory; mapped 1.21 hooks stay in their existing builds.
+sourceSets.main.resources.exclude 'noloadingscreen.neoforge.mixins.json'
+processResources {
+    def metadata = [version: project.version, minecraftVersion: minecraftVersion, neoForgeVersion: neoForgeVersion,
+        nextNeoForgeFamily: upperNeoForgeVersion]
+    inputs.properties metadata
+    filesMatching('META-INF/neoforge.mods.toml') { expand metadata }
+    from(apiSourceRoot + '/main/resources/noloadingscreen.mixins.json') {
+        rename { 'noloadingscreen.neoforge.mixins.json' }
+    }
+}
+sourceSets {
+    launcher {
+        java.srcDir '../neoforge-common/src/launcher/java'
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.test.runtimeClasspath
+    }
+}
+def registerClientVerification(String name, String directory) {
+    tasks.register(name, JavaExec) {
+        group = 'verification'
+        dependsOn testClasses, launcherClasses
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+        classpath = sourceSets.launcher.runtimeClasspath
+        mainClass = 'io.github.bingkkni.noloadingscreen.launch.ClientVerificationLauncher'
+        jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED', '--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming'
+        systemProperty 'java.awt.headless', 'true'
+        systemProperty 'file.encoding', 'UTF-8'
+        workingDir layout.buildDirectory.dir(directory)
+        doFirst {
+            workingDir.mkdirs()
+            environment 'MOD_CLASSES', (sourceSets.main.output.files + sourceSets.test.output.files)
+                .findAll { it.exists() }.collect { 'noloadingscreen%%' + it.absolutePath }.join(File.pathSeparator)
+        }
+    }
+}
+registerClientVerification('verifyClient', 'client-verification')
+registerClientVerification('verifyCompatibility', 'compatibility-verification')
+tasks.named('verifyCompatibility', JavaExec) {
+    description = 'Verify client hooks plus the actual Sodium collectors with supplied unmodified optional mod jars.'
+    systemProperty 'nls.verify.compatibility', 'true'
+    doFirst {
+        def supplied = providers.gradleProperty('compatibilityJars').orNull
+        if (supplied == null || supplied.isBlank()) throw new GradleException('Supply -PcompatibilityJars=/path/to/mod.jar,...')
+        def jars = supplied.split('[,;]', -1).collectMany { token ->
+            def path = file(token.trim())
+            if (token.isBlank() || !path.exists()) throw new GradleException("Missing compatibility jar/path: ${token}")
+            path.isDirectory() ? fileTree(path) { include '*.jar' }.files.toList() : [path]
+        }.unique()
+        if (jars.isEmpty() || jars.any { !it.isFile() || !it.name.endsWith('.jar') }) throw new GradleException('Compatibility inputs must resolve to existing jar files')
+        jars.each { jar ->
+            def digest = java.security.MessageDigest.getInstance('SHA-1')
+            jar.withInputStream { stream ->
+                byte[] bytes = new byte[65536]
+                int count
+                while ((count = stream.read(bytes)) != -1) digest.update(bytes, 0, count)
+            }
+            logger.lifecycle("Compatibility input: ${jar.name} SHA1=${digest.digest().encodeHex()}")
+        }
+        project.sync { from jars; into new File(workingDir, 'mods'); duplicatesStrategy = DuplicatesStrategy.FAIL }
+    }
+}
+check.dependsOn verifyClient

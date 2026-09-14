@@ -11,6 +11,8 @@ public final class LoaderServices {
 
 	public static String sodiumFluidRenderer() { return "net.caffeinemc.mods.sodium.neoforge.render.FluidRendererImpl"; }
 
+	public static boolean allowsEarlyLocalConnection() { return true; }
+
 	public static Path configDirectory() {
 		return FMLPaths.CONFIGDIR.get();
 	}

@@ -29,9 +29,10 @@ dependencies {
 processResources {
 	def version = project.version
 	inputs.property "version", version
+	inputs.property "minecraftVersion", project.minecraft_version
 
 	filesMatching("fabric.mod.json") {
-		expand "version": version
+		expand "version": version, "minecraftVersion": "~${project.minecraft_version}"
 	}
 }
 
@@ -45,6 +46,14 @@ java {
 
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
+}
+
+// Keep the archive name descriptive while leaving project.version as the semantic
+// mod version used in fabric.mod.json.
+def fabricArtifactVersion = "${project.version}-Fabric-${project.minecraft_version}"
+tasks.withType(org.gradle.api.tasks.bundling.Jar).configureEach {
+	archiveBaseName = 'NoLoadingScreen'
+	archiveVersion = fabricArtifactVersion
 }
 
 test {
@@ -227,3 +236,11 @@ jar {
 		rename { "${it}_$projectName" }
 	}
 }
+
+ext.repositoryRoot = projectDir
+ext.artifactMetadata = 'fabric.mod.json'
+ext.artifactMixins = 'noloadingscreen.mixins.json'
+apply from: 'gradle/verify-modern-artifact.gradle'
+ext.loaderName = 'Fabric'
+ext.repairSmokeLayers = [file('src/repairSmoke/java')]
+apply from: 'gradle/repair-gpu.gradle'

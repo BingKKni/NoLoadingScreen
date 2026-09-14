@@ -1,0 +1,104 @@
+ext.loaderName = 'Forge'
+ext.sourceLayers = [
+    fileTree('src/main/java'),
+    fileTree('../forge-modern/src/main/java'),
+    fileTree(apiSourceRoot + '/main/java') {
+        exclude '**/platform/FabricBootstrap.java', '**/compat/ModMenuIntegration.java'
+    },
+    fileTree('../../src/main/java') {
+        exclude '**/platform/FabricBootstrap.java', '**/compat/ModMenuIntegration.java'
+    }
+]
+apply from: '../modern-common.gradle'
+
+minecraft {
+    runs {
+        configureEach {
+            workingDir = layout.projectDirectory.dir('run')
+            args '--mixin.config=noloadingscreen.forge.mixins.json'
+            systemProperty 'eventbus.api.strictRuntimeChecks', 'true'
+        }
+        register('client')
+    }
+}
+repositories {
+    minecraft.mavenizer(it)
+    maven fg.forgeMaven
+    maven fg.minecraftLibsMaven
+    mavenCentral()
+}
+dependencies {
+    implementation minecraft.dependency("net.minecraftforge:forge:${minecraftVersion}-${forgeVersion}")
+}
+// Minecraft 26.x ships named classes, so no obfuscation processor/refmap is needed.
+// Required injection points are checked by the native CLIENT transformation verifier.
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += '-proc:none'
+}
+sourceSets.main.resources.srcDir '../forge-modern/src/main/resources'
+apply from: '../../gradle/forge-pack-resources.gradle'
+def apiMixinConfig = file(apiSourceRoot + '/main/resources/noloadingscreen.mixins.json')
+def forgeMixinDirectory = layout.buildDirectory.dir('generated/forgeMixins')
+def generateForgeMixins = tasks.register('generateForgeMixins') {
+    inputs.file apiMixinConfig
+    outputs.dir forgeMixinDirectory
+    doLast {
+        def config = new groovy.json.JsonSlurper().parse(apiMixinConfig, 'UTF-8')
+        // Forge bundles upstream Mixin 0.8.7, whose capability enum stops before JAVA_25.
+        // This declares required Mixin features, not the Java compiler/runtime target.
+        config.compatibilityLevel = 'JAVA_21'
+        config.minVersion = '0.8.7'
+        // Keep the Forge-specific mipmap guard out of Fabric/NeoForge artifacts.
+        config.client.add('ForgeSpriteLoaderMixin')
+        def output = forgeMixinDirectory.get().file('noloadingscreen.forge.mixins.json').asFile
+        output.parentFile.mkdirs()
+        output.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(config)) + '\n', 'UTF-8')
+    }
+}
+processResources {
+    def metadata = [version: project.version, minecraftVersion: minecraftVersion,
+        forgeVersion: forgeVersion, forgeMajor: forgeVersion.tokenize('.')[0]]
+    inputs.properties metadata
+    filesMatching('META-INF/mods.toml') { expand metadata }
+    from(generateForgeMixins)
+}
+jar {
+    manifest.attributes('MixinConfigs': 'noloadingscreen.forge.mixins.json')
+}
+
+sourceSets.test.java.srcDir '../forge-modern/src/test/java'
+sourceSets.test.resources.srcDir '../forge-modern/src/test/resources'
+// Use the real Forge CLIENT launch target. A test-only Main injection runs the verifier
+// before window initialization, after normal discovery and transformer setup.
+tasks.register('clientVerificationJar', Jar) {
+    dependsOn testClasses
+    archiveClassifier = 'client-verification'
+    destinationDirectory = layout.buildDirectory.dir('client-verification/mods')
+    from sourceSets.main.output
+    from sourceSets.test.output
+    manifest.attributes('MixinConfigs': 'noloadingscreen.forge.mixins.json')
+}
+tasks.register('verifyClient', JavaExec) {
+    group = 'verification'
+    description = 'Verify strict Mixins and shared fixtures in the native Forge CLIENT transformer.'
+    dependsOn clientVerificationJar
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    classpath = configurations.testRuntimeClasspath
+    mainClass = 'net.minecraftforge.bootstrap.ForgeBootstrap'
+    args '--launchTarget', 'forge_userdev_client', '--gameDir', '.',
+        '--mixin.config=noloadingscreen.forge.mixins.json',
+        '--mixin.config=noloadingscreen.forge.verification.mixins.json'
+    systemProperty 'nls.mixinConfig', 'noloadingscreen.forge.mixins.json'
+    systemProperty 'java.awt.headless', 'true'
+    systemProperty 'file.encoding', 'UTF-8'
+    jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED',
+        '--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming'
+    workingDir layout.buildDirectory.dir('client-verification')
+    doFirst {
+        workingDir.mkdirs()
+        def config = new File(workingDir, 'config/fml.toml')
+        config.parentFile.mkdirs()
+        config.setText('earlyWindowControl = false\n', 'UTF-8')
+    }
+}
+check.dependsOn verifyClient

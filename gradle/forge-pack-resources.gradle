@@ -1,0 +1,24 @@
+// Forge reads pack.mcmeta from each mod JAR; it does not synthesize missing metadata.
+// Read the format from the resolved game artifact, rather than maintaining a version table.
+def packDirectory = layout.buildDirectory.dir('generated/forgePack')
+def generateForgePack = tasks.register('generateForgePack') {
+    inputs.files(configurations.compileClasspath)
+    outputs.dir packDirectory
+    doLast {
+        def formats = configurations.compileClasspath.files.findAll { it.name.endsWith('.jar') }.collectMany { artifact ->
+            new java.util.zip.ZipFile(artifact).withCloseable { zip ->
+                def entry = zip.getEntry('version.json')
+                if (entry == null) return []
+                def version = zip.getInputStream(entry).withCloseable { new groovy.json.JsonSlurper().parse(it) }
+                def pack = version.pack_version
+                pack?.resource_major != null ? [[pack.resource_major, pack.resource_minor]] : []
+            }
+        }.unique()
+        if (formats.size() != 1) throw new GradleException("Expected one game resource-pack format, found ${formats}")
+        def metadata = [pack: [description: 'NoLoadingScreen resources', min_format: formats.first(), max_format: formats.first()]]
+        def output = packDirectory.get().file('pack.mcmeta').asFile
+        output.parentFile.mkdirs()
+        output.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n', 'UTF-8')
+    }
+}
+processResources { from(generateForgePack) }

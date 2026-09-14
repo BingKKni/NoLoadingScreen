@@ -1,0 +1,9 @@
+{
+    "schemaVersion": 1,
+    "id": "noloadingscreen_verification",
+    "version": "1.0.0",
+    "environment": "client",
+    "entrypoints": {
+        "preLaunch": ["io.github.bingkkni.noloadingscreen.verification.FabricVerification"]
+    }
+}

@@ -1,0 +1,60 @@
+apply plugin: 'java-library'
+
+def rootProperties = new Properties()
+file('../../gradle.properties').withInputStream { rootProperties.load(it) }
+version = providers.gradleProperty('version').getOrElse(rootProperties.getProperty('version'))
+group = rootProperties.getProperty('group')
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.encoding = 'UTF-8'
+}
+tasks.withType(JavaExec).configureEach {
+    systemProperty 'stdout.encoding', 'UTF-8'
+    systemProperty 'stderr.encoding', 'UTF-8'
+}
+tasks.withType(Jar).configureEach {
+    archiveBaseName = 'NoLoadingScreen'
+    archiveVersion = "${project.version}-${loaderName}-${minecraftVersion}"
+}
+
+// Highest-priority API/loader layer wins by relative path, without rewriting Java sources.
+def selected = [:]
+sourceLayers.each { layer ->
+    layer.visit { entry ->
+        if (!entry.directory) selected.putIfAbsent(entry.relativePath.pathString, entry.file)
+    }
+}
+sourceSets.main.java.setSrcDirs([])
+tasks.named('compileJava', JavaCompile) { source selected.values() }
+tasks.named('sourcesJar', Jar) {
+    selected.each { path, sourceFile ->
+        from(sourceFile) { into path.substring(0, path.lastIndexOf('/')) }
+    }
+}
+sourceSets.main.resources.srcDir '../../src/main/resources'
+sourceSets.main.resources.exclude 'fabric.mod.json', 'noloadingscreen.mixins.json'
+jar {
+    from('../../LICENSE') { rename { 'LICENSE_noloadingscreen' } }
+}
+repositories { mavenCentral() }
+dependencies { compileOnly 'org.jspecify:jspecify:1.0.0' }
+sourceSets.test.java.srcDir '../modern-common/src/test/java'
+def sharedTests = fileTree('../../src/test/java') {
+    include '**/PlaceholderMovementTest.java', '**/verification/SkinPreloadVerification.java'
+    include '**/verification/SkinTestTexture.java', '**/verification/JoinClassWarmupVerification.java'
+    include '**/verification/SodiumQueueVerification.java'
+}
+tasks.named('compileTestJava', JavaCompile) { source sharedTests }
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
+test { failOnNoDiscoveredTests = false }
+ext.repositoryRoot = file('../..')
+ext.artifactMetadata = [Fabric: 'fabric.mod.json', NeoForge: 'META-INF/neoforge.mods.toml', Forge: 'META-INF/mods.toml'][loaderName]
+ext.artifactMixins = [Fabric: 'noloadingscreen.mixins.json', NeoForge: 'noloadingscreen.neoforge.mixins.json', Forge: 'noloadingscreen.forge.mixins.json'][loaderName]
+apply from: '../../gradle/verify-modern-artifact.gradle'
+ext.repairSmokeLayers = [file(apiSourceRoot + '/repairSmoke/java'), file('../../src/repairSmoke/java')]
+apply from: '../../gradle/repair-gpu.gradle'

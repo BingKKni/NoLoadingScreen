@@ -1,0 +1,8 @@
+{
+    "required": true,
+    "minVersion": "0.8.7",
+    "package": "io.github.bingkkni.noloadingscreen.verification.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": ["VerificationMainMixin"],
+    "injectors": {"defaultRequire": 1}
+}

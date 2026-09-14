@@ -1,0 +1,53 @@
+// Applied only to Java 25 artifacts; the mapped Java 21 builds keep their existing verifier.
+tasks.register('verifyModernArtifact') {
+    group = 'verification'
+    description = 'Check release metadata, shared icon, Java level and test/loader isolation.'
+    dependsOn jar
+    doLast {
+        def artifact = tasks.named('jar').get().archiveFile.get().asFile
+        def iconPath = 'assets/noloadingscreen/icon.png'
+        // Callers supply the repository root, independent of standalone project location.
+        def sourceIcon = new File(repositoryRoot, 'src/main/resources/' + iconPath)
+        new java.util.zip.ZipFile(artifact).withCloseable { zip ->
+            [artifactMetadata, artifactMixins, iconPath, 'io/github/bingkkni/noloadingscreen/NoLoadingScreen.class'].each { path ->
+                if (zip.getEntry(path) == null) throw new GradleException("Missing ${path} in ${artifact.name}")
+            }
+            def readBytes = { String path -> zip.getInputStream(zip.getEntry(path)).withCloseable { it.readAllBytes() } }
+            if (!Arrays.equals(readBytes(iconPath), sourceIcon.bytes)) throw new GradleException('Release icon differs from shared artwork')
+            def image = javax.imageio.ImageIO.read(new ByteArrayInputStream(readBytes(iconPath)))
+            if (image == null || image.width < 1 || image.height < 1) throw new GradleException('Invalid PNG icon')
+            def metadata = new String(readBytes(artifactMetadata), java.nio.charset.StandardCharsets.UTF_8)
+            if (!metadata.contains(iconPath) || !metadata.contains(project.version.toString()) || metadata.contains('${'))
+                throw new GradleException('Metadata has a missing icon/version or unexpanded placeholder')
+            def mixins = new groovy.json.JsonSlurper().parse(readBytes(artifactMixins))
+            def expectedMixinLevel = artifactMetadata == 'META-INF/mods.toml' ? 'JAVA_21' : 'JAVA_25'
+            if (mixins.compatibilityLevel != expectedMixinLevel || mixins.injectors.defaultRequire != 1)
+                throw new GradleException('Required loader-compatible strict Mixin policy missing')
+            if (artifactMetadata == 'META-INF/mods.toml') {
+                if (zip.getEntry('pack.mcmeta') == null) throw new GradleException('Forge resource-pack metadata missing')
+                def pack = new groovy.json.JsonSlurper().parse(readBytes('pack.mcmeta')).pack
+                if (!pack?.description || !(pack.min_format instanceof List) || pack.min_format != pack.max_format)
+                    throw new GradleException('Forge resource-pack format was not generated for the target game')
+            }
+            if (artifactMetadata == 'fabric.mod.json') {
+                def fabric = new groovy.json.JsonSlurper().parseText(metadata)
+                if (fabric.version != project.version.toString() || fabric.icon != iconPath || fabric.environment != 'client')
+                    throw new GradleException('Invalid Fabric client metadata')
+            }
+            def forbidden = zip.entries().findAll { entry ->
+                entry.name.contains('/verification/') || entry.name.contains('/smoke/') || entry.name.contains('/launch/') ||
+                entry.name.endsWith('Verification.class') || entry.name.contains('.verification.') || entry.name.endsWith('Test.class') ||
+                (entry.name in ['fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml'] && entry.name != artifactMetadata) ||
+                (artifactMetadata != 'fabric.mod.json' && (entry.name.contains('FabricBootstrap') || entry.name.contains('ModMenuIntegration')))
+            }
+            if (!forbidden.isEmpty()) throw new GradleException("Wrong-loader or test files in ${artifact.name}: ${forbidden}")
+            new DataInputStream(new ByteArrayInputStream(readBytes('io/github/bingkkni/noloadingscreen/NoLoadingScreen.class'))).withCloseable { data ->
+                data.readInt()
+                data.readUnsignedShort()
+                if (data.readUnsignedShort() != 69) throw new GradleException('Release must target Java 25')
+            }
+        }
+        logger.lifecycle("Verified release resources and isolation: ${artifact.name}")
+    }
+}
+check.dependsOn verifyModernArtifact

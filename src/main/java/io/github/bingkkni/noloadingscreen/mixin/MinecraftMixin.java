@@ -1,6 +1,7 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import io.github.bingkkni.noloadingscreen.platform.LoaderServices;
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
@@ -303,19 +304,18 @@ public abstract class MinecraftMixin {
 	 * connection. That is the frozen second at the start of a singleplayer join, and no amount of
 	 * drawing something nicer can help while the loop owns the thread.
 	 *
-	 * <p>The wait is not load-bearing. {@code ServerConnectionListener} is built in the
-	 * {@code MinecraftServer} constructor, which has already run by then, so the memory channel can
-	 * be opened immediately; the handshake simply queues until the server thread starts ticking. The
-	 * client goes back to its normal loop and ticks {@code pendingConnection} like any other pending
-	 * connection. The {@code overlay != null} half of the condition is left alone — that one waits
-	 * for a resource reload, which really does have to finish first.
+	 * <p>On loaders that allow early local connections, the memory channel can open immediately
+	 * and the handshake queues until the server starts ticking. Forge instead rejects these
+	 * handshakes on the network thread until its startup login gate opens. It must retain the real
+	 * readiness check; {@link LoadingWaitLoop} keeps the placeholder interactive during that wait.
+	 * The {@code overlay != null} condition is always left intact: resource reloads must finish.
 	 */
 	@Redirect(
 		method = "doWorldLoad",
 		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/server/IntegratedServer;isReady()Z")
 	)
 	private boolean nls$dontFreezeWhileServerBoots(final IntegratedServer server) {
-		return NoLoadingScreenConfig.get().enabled || server.isReady();
+		return (NoLoadingScreenConfig.get().enabled && LoaderServices.allowsEarlyLocalConnection()) || server.isReady();
 	}
 
 	@WrapMethod(method = "doWorldLoad")

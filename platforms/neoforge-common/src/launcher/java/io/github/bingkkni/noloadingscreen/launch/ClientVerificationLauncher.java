@@ -19,7 +19,7 @@ public final class ClientVerificationLauncher {
 			Thread.currentThread().setContextClassLoader(loader.getCurrentClassLoader());
 			try {
 				if (Boolean.getBoolean("nls.verify.gpu")) {
-					org.spongepowered.asm.mixin.Mixins.addConfiguration("noloadingscreen.smoke.mixins.json");
+					org.spongepowered.asm.mixin.Mixins.addConfiguration(System.getProperty("nls.verify.smokeConfig", "noloadingscreen.smoke.mixins.json"));
 					Class.forName("net.minecraft.client.main.Main", true, loader.getCurrentClassLoader())
 						.getMethod("main", String[].class).invoke(null, (Object) args);
 				} else {

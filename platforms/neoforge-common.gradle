@@ -5,7 +5,14 @@ def rootProperties = new Properties()
 file('../../gradle.properties').withInputStream { rootProperties.load(it) }
 version = providers.gradleProperty('version').getOrElse(rootProperties.getProperty('version'))
 group = rootProperties.getProperty('group')
-base.archivesName = "noloadingscreen-neoforge-${minecraftVersion}"
+base.archivesName = 'NoLoadingScreen'
+// Keep project.version semantic for NeoForge metadata while publishing a
+// loader- and Minecraft-version-specific archive name.
+def neoForgeArtifactVersion = "${project.version}-NeoForge-${minecraftVersion}"
+tasks.withType(Jar).configureEach {
+	archiveBaseName = 'NoLoadingScreen'
+	archiveVersion = neoForgeArtifactVersion
+}
 
 java {
 	toolchain.languageVersion = JavaLanguageVersion.of(21)
@@ -31,7 +38,7 @@ def sharedJava = fileTree('../../src/main/java') {
 	exclude '**/PlayAddonGuard.java'
 	exclude '**/mixin/MinecraftMixin.java', '**/mixin/GuiMixin.java', '**/mixin/HudMixin.java'
 	exclude '**/mixin/LevelRendererMixin.java', '**/mixin/LevelExtractorMixin.java', '**/mixin/LevelRendererAccessor.java'
-	exclude '**/mixin/LevelLoadTrackerMixin.java', '**/mixin/GameRendererMixin.java', '**/mixin/LivingEntityAccessor.java'
+	exclude '**/mixin/LevelLoadTrackerMixin.java', '**/mixin/GameRendererMixin.java', '**/mixin/GameRendererAccessor.java', '**/mixin/LivingEntityAccessor.java'
 	exclude '**/mixin/ClientHandshakePacketListenerImplMixin.java', '**/mixin/SodiumWorldRendererMixin.java'
 	exclude '**/compat/ModMenuIntegration.java', '**/compat/SodiumCompatibility.java', '**/compat/SodiumShaderWarmup.java'
 }
@@ -189,3 +196,8 @@ check.dependsOn verifyClient, verifyRegistries, verifyArtifact
 sourceSets.main.resources.exclude 'fabric.mod.json', 'noloadingscreen.mixins.json'
 repositories { mavenCentral() }
 dependencies { compileOnly 'org.jspecify:jspecify:1.0.0' }
+ext.repositoryRoot = file('../..')
+ext.loaderName = 'NeoForge'
+ext.artifactMixins = 'noloadingscreen.neoforge.mixins.json'
+ext.repairSmokeLayers = [file('../neoforge-common/src/repairSmoke/java'), file('../../src/repairSmoke/java')]
+apply from: '../../gradle/repair-gpu.gradle'

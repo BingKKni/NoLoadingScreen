@@ -1,0 +1,37 @@
+ext.loaderName = 'Fabric'
+ext.apiSourceRoot = '../minecraft-26.1/src'
+ext.sourceLayers = [fileTree('src/main/java'), fileTree('../fabric-modern/src/main/java'),
+    fileTree(apiSourceRoot + '/main/java'), fileTree('../../src/main/java')]
+apply from: '../modern-common.gradle'
+repositories {
+    maven { url = 'https://maven.terraformersmc.com/releases/' }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraftVersion}"
+    implementation 'net.fabricmc:fabric-loader:0.19.3'
+    compileOnly 'com.terraformersmc:modmenu:18.0.1'
+}
+processResources {
+    inputs.properties([version: project.version, minecraftVersion: minecraftVersion])
+    from('../../src/main/resources/fabric.mod.json') {
+        expand version: project.version, minecraftVersion: "=${minecraftVersion}"
+    }
+    from(apiSourceRoot + '/main/resources/noloadingscreen.mixins.json')
+}
+sourceSets.test.java.srcDir '../fabric-modern/src/test/java'
+sourceSets.test.resources.srcDir '../fabric-modern/src/test/resources'
+tasks.register('verifyClient', JavaExec) {
+    group = 'verification'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+    systemProperty 'fabric.development', 'true'
+    systemProperty 'java.awt.headless', 'true'
+    systemProperty 'nls.mixinConfig', 'noloadingscreen.mixins.json'
+    systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+        .collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+        .join(File.pathSeparator + File.pathSeparator)
+    workingDir layout.buildDirectory.dir('client-verification')
+    doFirst { workingDir.mkdirs() }
+}
+check.dependsOn verifyClient

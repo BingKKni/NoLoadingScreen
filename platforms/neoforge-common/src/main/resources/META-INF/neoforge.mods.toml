@@ -7,6 +7,7 @@ issueTrackerURL="https://github.com/BingKKni/NoLoadingScreen/issues"
 modId="noloadingscreen"
 version="${version}"
 displayName="NoLoadingScreen"
+logoFile="assets/noloadingscreen/icon.png"
 displayURL="https://github.com/BingKKni/NoLoadingScreen"
 authors="BingKKni"
 description='''Interactive local loading scenes without fabricating, dropping or reordering protocol packets.'''

@@ -1,0 +1,100 @@
+// Opt-in real GPU regression runner. All writes stay in this project's build directory.
+// Fixture sources follow the main layering: the API-family root wins by relative path, the shared
+// root supplies the rest. No Java source is rewritten and nothing tests a game version at runtime.
+def repairSources = [:]
+repairSmokeLayers.each { root ->
+    if (root.directory) fileTree(root).visit { entry -> if (!entry.directory) repairSources.putIfAbsent(entry.relativePath.pathString, entry.file) }
+}
+sourceSets {
+    repairSmoke {
+        java.setSrcDirs([])
+        resources.setSrcDirs([new File(repositoryRoot, 'src/repairSmoke/resources')])
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+tasks.named('compileRepairSmokeJava', JavaCompile) { source repairSources.values() }
+def smokeDir = layout.buildDirectory.dir('repair-gpu')
+def smokeMods = providers.gradleProperty('smokeModJars')
+if (loaderName == 'Fabric') {
+    tasks.named('processRepairSmokeResources') {
+        from(new File(repositoryRoot, 'src/repairSmoke/fabric.mod.json'))
+    }
+}
+if (loaderName == 'Forge') {
+    tasks.register('repairSmokeJar', Jar) {
+        dependsOn repairSmokeClasses
+        archiveClassifier = 'repair-smoke'
+        destinationDirectory = smokeDir.map { it.dir('mods') }
+        from sourceSets.main.output
+        from sourceSets.repairSmoke.output
+        manifest.attributes('MixinConfigs': artifactMixins + ',noloadingscreen.repair-smoke.mixins.json')
+    }
+}
+tasks.register('verifyRepairGpu', JavaExec) {
+    group = 'verification'
+    description = 'Run isolated actual-GPU save/kick/input/inventory regression frames; no user saves or servers.'
+    dependsOn repairSmokeClasses
+    classpath = sourceSets.repairSmoke.runtimeClasspath
+    maxHeapSize = '2G'
+    timeout = java.time.Duration.ofMinutes(4)
+    workingDir smokeDir
+    systemProperty 'java.awt.headless', 'false'
+    systemProperty 'nls.verify.gpu', 'true'
+    systemProperty 'nls.verify.smokeConfig', 'noloadingscreen.repair-smoke.mixins.json'
+    systemProperty 'file.encoding', 'UTF-8'
+    if (loaderName == 'NeoForge') {
+        dependsOn launcherClasses
+        classpath += sourceSets.launcher.output
+        mainClass = 'io.github.bingkkni.noloadingscreen.launch.ClientVerificationLauncher'
+    } else if (loaderName == 'Forge') {
+        dependsOn repairSmokeJar
+        classpath = configurations.runtimeClasspath
+        mainClass = 'net.minecraftforge.bootstrap.ForgeBootstrap'
+        args '--launchTarget', 'forge_userdev_client', '--mixin.config=' + artifactMixins,
+            '--mixin.config=noloadingscreen.repair-smoke.mixins.json'
+    } else {
+        mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+        systemProperty 'fabric.development', 'true'
+        systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.repairSmoke.output]
+            .collect { it.files.collect { f -> f.absolutePath }.join(File.pathSeparator) }.join(File.pathSeparator + File.pathSeparator)
+    }
+    if (loaderName != 'Fabric') {
+        jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED', '--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming'
+    }
+    doFirst {
+        def assets = providers.gradleProperty('assetsDir').orNull
+        def index = providers.gradleProperty('assetIndex').orNull
+        if (assets == null || index == null || !file("${assets}/indexes/${index}.json").isFile())
+            throw new GradleException('Supply existing -PassetsDir=... -PassetIndex=... for this game')
+        workingDir.mkdirs()
+        def supplied = smokeMods.orNull
+        def mods = supplied == null ? [] : supplied.split('[,;]', -1).collect { token ->
+            def candidate = file(token.trim())
+            if (token.isBlank() || !candidate.isFile()) throw new GradleException("Missing smoke jar: ${token}")
+            candidate
+        }
+        if (loaderName == 'Forge') mods += tasks.named('repairSmokeJar').get().archiveFile.get().asFile
+        // Never sync a directory over a JAR which is also an input in that directory.
+        def modsDir = new File(workingDir, 'mods'); modsDir.mkdirs()
+        modsDir.listFiles().findAll { it.name.endsWith('.jar') && !mods.contains(it) }.each { it.delete() }
+        mods.findAll { it.parentFile != modsDir }.each { candidate -> project.copy { from candidate; into modsDir } }
+        if (loaderName == 'NeoForge') environment 'MOD_CLASSES', (sourceSets.main.output.files + sourceSets.repairSmoke.output.files)
+            .findAll { it.exists() }.collect { 'noloadingscreen%%' + it.absolutePath }.join(File.pathSeparator)
+        def config = new File(workingDir, 'config'); config.mkdirs()
+        new File(config, 'fml.toml').text = 'earlyWindowControl=false\n'
+        if (loaderName == 'NeoForge') new File(config, 'neoforge-client.toml').text = 'enableB3DValidationLayer=false\n'
+        new File(workingDir, 'options.txt').text = 'pauseOnLostFocus:false\nmaxFps:120\nenableVsync:false\nonboardAccessibility:false\nrenderDistance:4\n'
+        if (providers.gradleProperty('coldProfile').isPresent()) jvmArgs '-XX:StartFlightRecording=filename=repair-gpu.jfr,settings=profile,dumponexit=true'
+        args '--version', project.findProperty('minecraftVersion') ?: project.minecraft_version, '--gameDir', workingDir.absolutePath,
+            '--assetsDir', file(assets).absolutePath, '--assetIndex', index,
+            '--accessToken', '0', '--username', 'NlsRepairSmoke', '--width', '854', '--height', '480'
+        def log = new File(workingDir, 'logs/latest.log')
+        if (log.exists()) log.delete() // stale success must never satisfy this run
+    }
+    doLast {
+        def log = new File(workingDir, 'logs/latest.log')
+        if (!log.isFile() || !log.getText('UTF-8').contains('RepairGpuVerification PASSED'))
+            throw new GradleException('GPU client exited without completing repair assertions')
+    }
+}
