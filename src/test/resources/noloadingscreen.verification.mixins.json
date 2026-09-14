@@ -1,0 +1,7 @@
+{
+	"required": true,
+	"package": "io.github.bingkkni.noloadingscreen.verification.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": ["ColdStartGpuMixin"],
+	"injectors": {"defaultRequire": 1}
+}

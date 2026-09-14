@@ -47,6 +47,178 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
+test {
+	// Regression entry points run through JavaExec and Fabric's preLaunch, not a JUnit engine.
+	failOnNoDiscoveredTests = false
+}
+
+tasks.register('movementTest', JavaExec) {
+	group = 'verification'
+	description = 'Check placeholder movement speeds, damping, and interpolation.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'io.github.bingkkni.noloadingscreen.PlaceholderMovementTest'
+}
+
+tasks.register('verifyMixins', JavaExec) {
+	group = 'verification'
+	description = 'Apply client Mixins and check loading lifecycle without opening a game window.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+	systemProperty 'fabric.development', 'true'
+	// A transformation failure must fail CI, not leave Fabric's crash dialog waiting for a click.
+	systemProperty 'java.awt.headless', 'true'
+	systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+		.collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+		.join(File.pathSeparator + File.pathSeparator)
+	workingDir layout.buildDirectory.dir('verification-run')
+	doFirst {
+		workingDir.mkdirs()
+	}
+}
+
+// Opt-in regression against the user's actual ViaFabricPlus jar (including its nested mods).
+// Kept out of check: the mod remains optional and no third-party jar is downloaded or bundled.
+tasks.register('verifyInputCompatibility', JavaExec) {
+	group = 'verification'
+	description = 'Check input Mixin compatibility with -PviaFabricPlusJar=/path/to/ViaFabricPlus.jar.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+	systemProperty 'fabric.development', 'true'
+	systemProperty 'java.awt.headless', 'true'
+	systemProperty 'nls.verify.inputCompatibility', 'true'
+	systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+		.collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+		.join(File.pathSeparator + File.pathSeparator)
+	workingDir layout.buildDirectory.dir('input-compatibility-run')
+	doFirst {
+		def jarPath = providers.gradleProperty('viaFabricPlusJar').orNull
+		if (jarPath == null || !file(jarPath).isFile()) {
+			throw new GradleException('Supply an existing ViaFabricPlus jar with -PviaFabricPlusJar=/path/to/ViaFabricPlus.jar')
+		}
+		systemProperty 'fabric.addMods', file(jarPath).absolutePath
+		workingDir.mkdirs()
+	}
+}
+
+tasks.register('verifyLoadingCompatibility', JavaExec) {
+	group = 'verification'
+	description = 'Check loading hooks with supplied Sodium, Fabric API and ViaFabricPlus jars.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+	systemProperty 'fabric.development', 'true'
+	systemProperty 'java.awt.headless', 'true'
+	systemProperty 'nls.verify.inputCompatibility', 'true'
+	systemProperty 'nls.verify.loadingCompatibility', 'true'
+	systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+		.collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+		.join(File.pathSeparator + File.pathSeparator)
+	workingDir layout.buildDirectory.dir('loading-compatibility-run')
+	doFirst {
+		def jars = ['sodiumJar', 'fabricApiJar', 'viaFabricPlusJar'].collect { name ->
+			def path = providers.gradleProperty(name).orNull
+			if (path == null || !file(path).isFile()) throw new GradleException("Supply -P${name}=/path/to/mod.jar")
+			file(path).absolutePath
+		}
+		systemProperty 'fabric.addMods', jars.join(File.pathSeparator)
+		workingDir.mkdirs()
+	}
+}
+
+// Opt-in transformation matrix for renderer, culling, memory, HUD and lifecycle optimizers.
+// The caller supplies exact unmodified jars (or directories containing jars); nothing is bundled.
+tasks.register('verifyOptimizationCompatibility', JavaExec) {
+	group = 'verification'
+	description = 'Check NoLoadingScreen Mixins beside supplied Fabric optimization-mod jars.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+	systemProperty 'fabric.development', 'true'
+	systemProperty 'java.awt.headless', 'true'
+	systemProperty 'nls.verify.optimizationCompatibility', 'true'
+	systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+		.collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+		.join(File.pathSeparator + File.pathSeparator)
+	workingDir layout.buildDirectory.dir('optimization-compatibility-run')
+	doFirst {
+		def supplied = providers.gradleProperty('optimizationModJars').orNull
+		if (supplied == null || supplied.isBlank()) {
+			throw new GradleException('Supply -PoptimizationModJars=/path/to/mod.jar,/path/to/mods-directory')
+		}
+		def tokens = supplied.split('[,;]', -1).collect { it.trim() }
+		def empty = tokens.findAll { it.isEmpty() }
+		if (!empty.isEmpty()) {
+			throw new GradleException('optimizationModJars contains an empty path token; separate entries with commas or semicolons')
+		}
+		def missing = tokens.findAll { !file(it).exists() }
+		if (!missing.isEmpty()) {
+			throw new GradleException('optimizationModJars contains missing path(s): ' + missing.join(', '))
+		}
+		def jars = tokens.collectMany { raw ->
+			def candidate = file(raw)
+			if (candidate.isDirectory()) {
+				def found = fileTree(candidate) { include '*.jar' }.files.toList()
+				if (found.isEmpty()) throw new GradleException("optimizationModJars directory contains no .jar files: ${candidate}")
+				return found
+			}
+			if (candidate.isFile()) return [candidate]
+			throw new GradleException("optimizationModJars path is neither a file nor a directory: ${candidate}")
+		}.unique().findAll { !it.name.toLowerCase().startsWith('noloadingscreen') }
+		if (jars.isEmpty()) throw new GradleException('optimizationModJars did not resolve to any candidate jars (the project jar is ignored)')
+		systemProperty 'fabric.addMods', jars.collect { it.absolutePath }.join(File.pathSeparator)
+		workingDir.mkdirs()
+	}
+}
+
+// Explicit local GPU smoke test, never part of check/CI and never pointed at a user's game directory.
+tasks.register('verifyColdStartGpu', JavaExec) {
+	group = 'verification'
+	description = 'Start an isolated graphics client with supplied Sodium/Fabric API and local assets, then exit.'
+	dependsOn testClasses
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+	maxHeapSize = '2G'
+	timeout = java.time.Duration.ofMinutes(2)
+	systemProperty 'java.awt.headless', 'true'
+	systemProperty 'fabric.development', 'true'
+	systemProperty 'nls.verify.coldStartGpu', 'true'
+	systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+		.collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+		.join(File.pathSeparator + File.pathSeparator)
+	workingDir layout.buildDirectory.dir('cold-gpu-run')
+	doFirst {
+		def jars = ['sodiumJar', 'fabricApiJar'].collect { name ->
+			def path = providers.gradleProperty(name).orNull
+			if (path == null || !file(path).isFile()) throw new GradleException("Supply -P${name}=/path/to/mod.jar")
+			file(path).absolutePath
+		}
+		def assets = providers.gradleProperty('assetsDir').orNull
+		def index = providers.gradleProperty('assetIndex').orNull
+		if (assets == null || index == null || !file("${assets}/indexes/${index}.json").isFile()) {
+			throw new GradleException('Supply existing -PassetsDir=/path/to/assets and -PassetIndex=id')
+		}
+		systemProperty 'fabric.addMods', jars.join(File.pathSeparator)
+		workingDir.mkdirs()
+		if (providers.gradleProperty('coldProfile').isPresent()) {
+			jvmArgs '-XX:StartFlightRecording=filename=cold-start.jfr,settings=profile,dumponexit=true'
+		}
+		args '--version', project.minecraft_version, '--gameDir', workingDir.absolutePath,
+			'--assetsDir', file(assets).absolutePath, '--assetIndex', index,
+			'--accessToken', '0', '--username', 'NlsColdTest', '--width', '854', '--height', '480'
+	}
+	doLast {
+		def log = file("${workingDir}/logs/latest.log")
+		if (!log.isFile() || !log.getText('UTF-8').contains('ColdStartGpuVerification PASSED')) {
+			throw new GradleException('Graphics client exited without completing the smoke test')
+		}
+	}
+}
+
+check.dependsOn movementTest, verifyMixins
+
 jar {
 	def projectName = project.name
 	inputs.property "projectName", projectName

@@ -1,17 +1,30 @@
 package io.github.bingkkni.noloadingscreen;
 
-import com.mojang.authlib.GameProfile;
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import io.github.bingkkni.noloadingscreen.platform.SceneFactory;
+import io.github.bingkkni.noloadingscreen.platform.SceneRenderer;
+import io.github.bingkkni.noloadingscreen.platform.PlayerEnvironment;
+import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
+import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
+import net.minecraft.client.gui.screens.ChatScreen;
+import io.github.bingkkni.noloadingscreen.mixin.AvatarAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.ClientCommonPacketListenerImplAccessor;
-import java.util.Map;
-import java.util.UUID;
+import io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor;
+import io.github.bingkkni.noloadingscreen.mixin.EntityAccessor;
+import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
+import io.github.bingkkni.noloadingscreen.mixin.LocalPlayerAccessor;
+import io.github.bingkkni.noloadingscreen.mixin.PlayerAccessor;
 import net.minecraft.client.ClientRecipeBook;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
+import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.multiplayer.CommonListenerCookie;
-import net.minecraft.client.multiplayer.LevelLoadTracker;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
+import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.KeyboardInput;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Holder;
@@ -20,13 +33,13 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.server.ServerLinks;
 import net.minecraft.stats.StatsCounter;
-import net.minecraft.util.Mth;
-import net.minecraft.world.Difficulty;
-import net.minecraft.world.clock.ClockNetworkState;
-import net.minecraft.world.clock.WorldClock;
-import net.minecraft.world.clock.WorldClocks;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.player.PlayerModelPart;
+import net.minecraft.world.entity.player.PlayerSkin;
 import net.minecraft.world.flag.FeatureFlagSet;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.level.Level;
@@ -56,14 +69,13 @@ import org.jspecify.annotations.Nullable;
  * pointing at the old level, and the old objects are handed back for the duration of each frame. You
  * see the place you just left, frozen, and can look around it. Nothing is constructed at all.
  *
- * <h2>Synthesising (singleplayer world load)</h2>
+ * <h2>Synthesising (initial world load / server login)</h2>
  *
  * <p>Starting a singleplayer world has no previous world to keep, so {@link #synthesise} builds an
- * ordinary, complete {@code ClientLevel} — empty chunks, plains biome, noon, clear sky — and a
+ * ordinary {@code ClientLevel} — empty chunk cache, plains biome, noon, clear sky — and a
  * {@code LocalPlayer} standing in it. This is deliberately the <em>only</em> path that constructs a
  * {@code ClientPacketListener}, because that constructor is hooked by other mods and has global side
- * effects; see {@link PlayAddonGuard}. It is safe here precisely because it runs when no play session
- * exists, which is the same reason there is nothing to adopt.
+ * effects; see {@link PlayAddonGuard}. It runs only before a real play listener exists.
  *
  * <h2>Why this is safe to point a server at</h2>
  *
@@ -81,15 +93,14 @@ import org.jspecify.annotations.Nullable;
  *       did can survive into the session, so the server has nothing to disagree with and no
  *       correction to send.</li>
  *   <li>Binding is per-frame: {@code minecraft.level} / {@code player} / {@code gameMode} are only
- *       assigned around a render frame and the two input calls that need a camera, then set back.</li>
+ *       assigned only around rendering, input/UI initialization and our local visual/movement
+ *       update, then set back before vanilla ticks entities or connections.</li>
  * </ul>
  */
 public final class PlaceholderWorld {
 	/** Small on purpose: {@code ClientChunkCache} allocates {@code (2r+1)^2} slots up front. */
 	private static final int CHUNK_RADIUS = 2;
 	private static final int SEA_LEVEL = 63;
-	/** Noon, so the synthesised sky is bright rather than whatever tick 0 happens to mean. */
-	private static final long NOON = 6000L;
 	/** Anything but 0, which {@code Entity#getId} treats as "not assigned yet" and throws on. */
 	private static final int PLACEHOLDER_ENTITY_ID = 1;
 	/**
@@ -110,8 +121,15 @@ public final class PlaceholderWorld {
 	private static boolean building;
 	/** Non-zero while the fields are handed to vanilla; a counter because renders can nest. */
 	private static int bindDepth;
-	/** Frames that threw with the placeholder up, counted for the life of the process. */
+	/** Failed placeholder frames/local updates, counted for the life of the process. */
 	private static int renderFailures;
+	private static final PlaceholderMovement movement = new PlaceholderMovement();
+	private static final PlaceholderDeltaTracker renderClock = new PlaceholderDeltaTracker();
+	private static double walkingSpeed;
+	private static double flyingSpeed;
+	private static final PlaceholderControls controls = new PlaceholderControls();
+	private static final PlaceholderInteraction interaction = new PlaceholderInteraction();
+	private static double syntheticFloor;
 
 	// What was in Minecraft's three fields before the outermost bind, put back by the matching
 	// unbind. Saved rather than assumed null: vanilla's teardown clears them one at a time —
@@ -124,8 +142,23 @@ public final class PlaceholderWorld {
 	private PlaceholderWorld() {
 	}
 
+	public static boolean syntheticActive() {
+		return installed && synthetic;
+	}
+
 	public static boolean active() {
 		return installed;
+	}
+
+	/** Local mutations require both the correct disposable player and its scoped binding. */
+	public static boolean owns(final LocalPlayer candidate) {
+		Minecraft minecraft = Minecraft.getInstance();
+		return installed && candidate == player && level != null && minecraft.level == level && minecraft.player == candidate;
+	}
+
+	/** A synthetic listener has no PlayerInfo; adopted and real players keep vanilla's lookup. */
+	public static @Nullable PlayerSkin skinFor(final AbstractClientPlayer candidate) {
+		return installed && synthetic && candidate == player ? LocalSkinPreloader.get(candidate.getUUID()) : null;
 	}
 
 	/** False once the placeholder has failed enough times to have earned being left switched off. */
@@ -150,6 +183,16 @@ public final class PlaceholderWorld {
 		final ClientLevel oldLevel,
 		final LocalPlayer oldPlayer,
 		final @Nullable MultiPlayerGameMode oldGameMode
+	) {
+		return adopt(oldLevel, oldPlayer, oldGameMode, true);
+	}
+
+	/** Saving defers screen dismissal until GuiMixin handles vanilla's saving message. */
+	public static boolean adopt(
+		final ClientLevel oldLevel,
+		final LocalPlayer oldPlayer,
+		final @Nullable MultiPlayerGameMode oldGameMode,
+		final boolean dismissScreen
 	) {
 		if (installed) {
 			return true;
@@ -182,13 +225,15 @@ public final class PlaceholderWorld {
 		try {
 			// The listener is kept, but its line to the server is cut first: see the accessor.
 			((ClientCommonPacketListenerImplAccessor) oldPlayer.connection).nls$setConnection(deadConnection());
+			initializeMovement();
 
 			// clearClientLevel calls gameRenderer.resetData(), which resets the camera; these two put
 			// it back. Deliberately *not* levelExtractor.setLevel — that would discard every built
 			// section and re-mesh the whole world, which is the exact cost this mod exists to avoid.
 			minecraft.gameRenderer.setLevel(oldLevel);
+			SceneRenderer.ensureSky(minecraft);
 			minecraft.setCameraEntity(oldPlayer);
-			dropScreen(minecraft);
+			if (dismissScreen) dropScreen(minecraft);
 			// One line per server switch. The last crash was a null gameMode reaching the renderer,
 			// and this says outright whether the snapshot carried one — worth more than guessing
 			// from a stack trace on a machine that cannot run the game.
@@ -210,7 +255,7 @@ public final class PlaceholderWorld {
 	 * a world.
 	 *
 	 * @param registries where blocks, biomes and dimension types come from. Singleplayer takes these
-	 *                   from the {@code WorldStem}, the only registry set that exists that early.
+	 *                   from the {@code WorldStem}; earlier phases use {@link PlaceholderRegistries}.
 	 */
 	public static boolean synthesise(
 		final RegistryAccess.Frozen registries,
@@ -220,6 +265,20 @@ public final class PlaceholderWorld {
 		final Vec3 pos,
 		final float yRot,
 		final float xRot
+	) {
+		return synthesise(registries, features, dimensionType, dimension, pos, yRot, xRot, true);
+	}
+
+	/** Initial server login may already have a mandatory pack prompt on top of the scene. */
+	public static boolean synthesise(
+		final RegistryAccess.Frozen registries,
+		final @Nullable FeatureFlagSet features,
+		final @Nullable Holder<DimensionType> dimensionType,
+		final @Nullable ResourceKey<Level> dimension,
+		final Vec3 pos,
+		final float yRot,
+		final float xRot,
+		final boolean dismissScreen
 	) {
 		if (installed) {
 			return true;
@@ -256,13 +315,15 @@ public final class PlaceholderWorld {
 		installed = true;
 
 		try {
+			initializeMovement();
 			// Ours to attach, and ours to keep attached until uninstall(): re-pointing these per
 			// frame would rebuild the section graph sixty times a second.
-			minecraft.levelExtractor.setLevel(level);
+			SceneRenderer.setLevel(minecraft, level);
 			minecraft.particleEngine.setLevel(level);
 			minecraft.gameRenderer.setLevel(level);
+			SceneRenderer.ensureSky(minecraft);
 			minecraft.setCameraEntity(player);
-			dropScreen(minecraft);
+			if (dismissScreen) dropScreen(minecraft);
 		} catch (Throwable t) {
 			NoLoadingScreen.LOGGER.warn("Could not install the placeholder world, falling back to vanilla", t);
 			uninstall();
@@ -287,42 +348,10 @@ public final class PlaceholderWorld {
 			? dimensionType
 			: registries.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(BuiltinDimensionTypes.OVERWORLD);
 
-		// Built from the local session rather than Minecraft#getGameProfile(), which joins on the
-		// profile future — a blocking network call is the last thing a join needs.
-		GameProfile profile = new GameProfile(minecraft.getUser().getProfileId(), minecraft.getUser().getName());
-		CommonListenerCookie cookie = new CommonListenerCookie(
-			new LevelLoadTracker(),
-			profile,
-			minecraft.getTelemetryManager().createWorldSessionManager(false, null, null, UUID.randomUUID()),
-			registries,
-			enabledFeatures,
-			"noloadingscreen:placeholder",
-			null,
-			null,
-			Map.of(),
-			null,
-			Map.of(),
-			ServerLinks.EMPTY,
-			Map.of(),
-			true
-		);
-		ClientPacketListener listener = new ClientPacketListener(minecraft, deadConnection(), cookie);
-
-		ClientLevel.ClientLevelData levelData = new ClientLevel.ClientLevelData(Difficulty.NORMAL, false, false);
-		levelData.setGameTime(NOON);
-		level = new ClientLevel(
-			listener,
-			levelData,
-			dimension != null ? dimension : Level.OVERWORLD,
-			type,
-			CHUNK_RADIUS,
-			CHUNK_RADIUS,
-			minecraft.levelExtractor,
-			false,
-			0L,
-			SEA_LEVEL
-		);
-		setNoon(listener, registries);
+		SceneFactory.Scene scene = SceneFactory.createLevel(minecraft, deadConnection(), registries, enabledFeatures, type,
+			dimension, CHUNK_RADIUS, SEA_LEVEL);
+		level = scene.level();
+		ClientPacketListener listener = scene.listener();
 
 		// setLocalMode() is deliberately not called: it reaches straight through to
 		// minecraft.player.getAbilities(), which is null at this point, and the field it would set
@@ -339,26 +368,15 @@ public final class PlaceholderWorld {
 		localPlayer.setOldPosAndRot();
 		level.addEntity(localPlayer);
 		player = localPlayer;
+		syntheticFloor = pos.y;
+		localPlayer.setOnGround(true);
+		// Pose queries need Minecraft#getConnection, so initialization happens only after all
+		// three placeholder fields exist and can be bound together (see initializeMovement).
 	}
 
 	/** A connection with no channel; {@code send} parks packets in a queue nobody drains. */
 	private static Connection deadConnection() {
 		return new Connection(PacketFlow.CLIENTBOUND);
-	}
-
-	/**
-	 * Since 26.2 the time of day is carried by {@code WorldClock}s rather than a field on the level,
-	 * and a client clock that was never told anything reads zero — midnight. Best effort: the sky is
-	 * cosmetic, so a registry that does not carry the overworld clock just gets whatever it defaults
-	 * to rather than failing the whole placeholder.
-	 */
-	private static void setNoon(final ClientPacketListener listener, final RegistryAccess.Frozen registries) {
-		try {
-			Holder<WorldClock> clock = registries.lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
-			listener.clockManager().handleUpdates(NOON, Map.of(clock, new ClockNetworkState(NOON, 0.0F, 1.0F)));
-		} catch (RuntimeException e) {
-			NoLoadingScreen.LOGGER.debug("Placeholder world keeps the default time of day", e);
-		}
 	}
 
 	// --- Lifecycle ----------------------------------------------------------------------------
@@ -370,8 +388,8 @@ public final class PlaceholderWorld {
 	private static void dropScreen(final Minecraft minecraft) {
 		if (bind()) {
 			try {
-				if (minecraft.gui.screen() != null) {
-					minecraft.gui.setScreen(null);
+				if (ClientUi.screen(minecraft) != null) {
+					ClientUi.setScreen(minecraft, null);
 				}
 			} finally {
 				unbind();
@@ -379,36 +397,43 @@ public final class PlaceholderWorld {
 		}
 	}
 
-	/**
-	 * Drops the placeholder. The render engines are deliberately not detached here: every caller is
-	 * a point where vanilla re-points them in the next few statements — {@code setLevel} to the new
-	 * world, {@code disconnect} to null — and detaching in between would throw away section meshes
-	 * only to rebuild them.
-	 */
+	/** Drops the placeholder and releases engines that still belong to the abandoned world. */
 	public static void uninstall() {
 		if (!installed) {
 			return;
 		}
 
-		// Never leave a binding behind: the next thing to run is usually Minecraft#setLevel.
+		// Close our local inventory while null-screen handling can still bind the placeholder.
+		// Never carry local edits over login, failure, or disconnect; leave unrelated prompts alone.
+		Minecraft client = Minecraft.getInstance();
+		// A held sandbox click must not become an attack/place packet in the new session. Keep
+		// movement keys alone, but require a fresh mouse press after the handoff.
+		client.options.keyAttack.setDown(false);
+		client.options.keyUse.setDown(false);
+		discardQueuedClicks();
+		if (ClientUi.screen(client) instanceof LoadingInventoryScreen || ClientUi.screen(client) instanceof LoadingPauseScreen
+			|| ClientUi.screen(client) instanceof ChatScreen) ClientUi.setScreen(client, null);
 		releaseAll();
-
+		PlaceholderBlockEffects.clear();
 		installed = false;
 		synthetic = false;
-		Minecraft.getInstance().setCameraEntity(null);
+		Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft.level == null) {
+			minecraft.setCameraEntity(null);
+			SceneRenderer.setLevel(minecraft, null);
+			minecraft.particleEngine.setLevel(null);
+			minecraft.gameRenderer.setLevel(null);
+		}
 
 		level = null;
 		player = null;
 		gameMode = null;
-	}
-
-	/** True when this placeholder owns the engine attachments, i.e. it built its own level. */
-	public static boolean isSynthetic() {
-		return synthetic;
+		renderClock.source = DeltaTracker.ZERO;
+		interaction.reset();
 	}
 
 	/**
-	 * Called when a frame that had the placeholder bound threw. This is a cosmetic feature standing
+	 * Called when a bound frame or local placeholder update threw. This is a cosmetic feature standing
 	 * in front of a join, so it does not get to take the game down with it: the placeholder is
 	 * dropped, the engines are put back where the suppressed teardown would have left them, and
 	 * {@code NoLoadingScreen} restores a real screen so the player is not left facing a black window.
@@ -419,7 +444,7 @@ public final class PlaceholderWorld {
 		// through swapping worlds" apart from "some other mod did not like the stand-in", none of
 		// which the stack trace on its own distinguishes. Written before the state is torn down.
 		NoLoadingScreen.LOGGER.error(
-			"Placeholder world failed to render; dropping it and falling back to vanilla "
+			"Placeholder world failed during rendering or local update; dropping it and falling back to vanilla "
 				+ "(mode={}, bindDepth={}, phase={}, bound level/player/gameMode={}/{}/{}, placeholder level/player/gameMode={}/{}/{})",
 			synthetic ? "synthesised" : "adopted",
 			bindDepth,
@@ -433,7 +458,6 @@ public final class PlaceholderWorld {
 			failure
 		);
 
-		boolean wasAdopted = installed && !synthetic;
 		uninstall();
 
 		if (++renderFailures >= MAX_RENDER_FAILURES) {
@@ -444,13 +468,6 @@ public final class PlaceholderWorld {
 			);
 		}
 
-		if (wasAdopted) {
-			// The teardown this mod suppressed never ran, so the engines are still pointing at a
-			// level nobody owns. Finish it now.
-			minecraft.levelExtractor.setLevel(null);
-			minecraft.particleEngine.setLevel(null);
-			minecraft.gameRenderer.setLevel(null);
-		}
 		NoLoadingScreen.onPlaceholderFailed();
 	}
 
@@ -543,53 +560,215 @@ public final class PlaceholderWorld {
 		unbind();
 	}
 
-	/**
-	 * Called once per client tick. The placeholder player is deliberately not in anything that ticks
-	 * entities, so this is the only thing that moves it — no physics, no {@code aiStep}, and
-	 * therefore no chance of the position code that talks to a server ever running.
-	 */
+	private static void initializeMovement() {
+		if (!bind()) throw new IllegalStateException("Cannot initialize an unbound placeholder");
+		try {
+			syncAppearance(player);
+			resetMovement(player);
+		} finally {
+			unbind();
+		}
+	}
+
+	private static void syncAppearance(final LocalPlayer localPlayer) {
+		if (!synthetic) return;
+		Options options = Minecraft.getInstance().options;
+		int parts = 0;
+		for (PlayerModelPart part : PlayerModelPart.values()) {
+			if (options.isModelPartEnabled(part)) parts |= part.getMask();
+		}
+		// No server will echo ClientInformation back to this disposable player.
+		localPlayer.getEntityData().set(AvatarAccessor.nls$modelCustomisation(), (byte)parts);
+		localPlayer.setMainArm(options.mainHand().get());
+	}
+
+	private static void resetMovement(final LocalPlayer localPlayer) {
+		interaction.reset();
+		PlaceholderBlockEffects.clear();
+		Vec3 velocity = localPlayer.getDeltaMovement();
+		movement.reset(localPlayer.getX(), localPlayer.getY(), localPlayer.getZ(), velocity.x, velocity.y, velocity.z, localPlayer.onGround());
+		walkingSpeed = localPlayer.getAttributeValue(Attributes.MOVEMENT_SPEED);
+		if (localPlayer.isSprinting()) walkingSpeed /= 1.3;
+		flyingSpeed = localPlayer.getAbilities().getFlyingSpeed();
+		Minecraft minecraft = Minecraft.getInstance();
+		// Preserve ability flight on a server handoff; a fresh synthetic player still starts on
+		// foot. Captured held keys are not new taps and must not toggle the inherited state.
+		controls.reset(localPlayer.isSprinting(), localPlayer.getAbilities().flying,
+			minecraft.options.keyUp.isDown(), minecraft.options.keyJump.isDown());
+		localPlayer.noPhysics = controls.flying();
+		// stopFallFlying briefly SETS the flag before clearing it, which starts an elytra sound
+		// even on a newly constructed standing player if called unconditionally.
+		if (localPlayer.isFallFlying()) localPlayer.stopFallFlying();
+		// Clear a captured bow/shield/spyglass pose without releaseUsingItem (which runs item
+		// gameplay callbacks). LocalPlayer.stopUsingItem only clears local use state on a client.
+		localPlayer.stopUsingItem();
+		localPlayer.input = new KeyboardInput(minecraft.options);
+		localPlayer.input.tick();
+		updatePose(localPlayer);
+		localPlayer.setOldPosAndRot();
+	}
+
+	/** Advances only local movement, visual state and the camera, never a gameplay/entity tick. */
 	public static void tick() {
 		LocalPlayer localPlayer = player;
 		ClientLevel placeholderLevel = level;
-		if (!installed || localPlayer == null || placeholderLevel == null) {
-			return;
+		if (!installed || localPlayer == null || placeholderLevel == null) return;
+
+		// Collision and pose helpers also reach Minecraft#getConnection via getPlayerInfo. A
+		// camera-only bind at the end of this method is too late, even for an adopted player whose
+		// PlayerInfo happens not to be cached. Release BEFORE vanilla ticks connections/entities.
+		if (!bind()) return;
+		try {
+			tickBound(localPlayer, placeholderLevel);
+		} finally {
+			unbind();
 		}
+	}
 
-		// Interpolation reads the previous position, so stamp it before moving rather than after.
-		localPlayer.setOldPosAndRot();
-
-		if (!NoLoadingScreenConfig.get().placeholderFreeMove) {
-			return;
-		}
-
+	private static void tickBound(final LocalPlayer localPlayer, final ClientLevel placeholderLevel) {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui.screen() != null || !minecraft.isWindowActive()) {
-			return;
+		syncAppearance(localPlayer);
+		boolean simulate = NoLoadingScreenConfig.get().placeholderFreeMove;
+		boolean inputEnabled = simulate && ClientUi.screen(minecraft) == null && ClientUi.overlay(minecraft) == null && minecraft.isWindowActive();
+		// Menus stop INPUT, not momentum/gravity/animation. In particular, typing W or Space in
+		// chat must not move or toggle flight, but opening chat in midair must not suspend a fall.
+		boolean forwardDown = inputEnabled && minecraft.options.keyUp.isDown();
+		boolean backwardDown = inputEnabled && minecraft.options.keyDown.isDown();
+		boolean jumpDown = inputEnabled && minecraft.options.keyJump.isDown();
+		boolean shiftDown = inputEnabled && minecraft.options.keyShift.isDown();
+		controls.tick(forwardDown, backwardDown, jumpDown, shiftDown,
+			inputEnabled && minecraft.options.keySprint.isDown(), minecraft.options.sprintWindow().get(), inputEnabled);
+		boolean flying = controls.flying();
+		localPlayer.getAbilities().flying = flying;
+		localPlayer.noPhysics = flying;
+		localPlayer.setSprinting(controls.sprinting());
+		localPlayer.input.tick();
+		if (!inputEnabled) localPlayer.input.keyPresses = net.minecraft.world.entity.player.Input.EMPTY;
+		// Render interpolation must never become the origin for the next physics/collision query.
+		localPlayer.setPos(movement.x(1), movement.y(1), movement.z(1));
+		localPlayer.setOldPosAndRot();
+		localPlayer.setOnGround(movement.onGround());
+		updatePose(localPlayer);
+		double sneakScale = localPlayer.isCrouching() ? localPlayer.getAttributeValue(Attributes.SNEAKING_SPEED) : 1.0;
+		double friction = placeholderLevel.getBlockState(localPlayer.getBlockPosBelowThatAffectsMyMovement()).getBlock().getFriction();
+		friction = modifiedFriction(friction, PlayerEnvironment.frictionModifier(localPlayer));
+		double airDragModifier = PlayerEnvironment.airDragModifier(localPlayer);
+		PlaceholderMovement.Physics physics = new PlaceholderMovement.Physics(walkingSpeed, flyingSpeed,
+			((LivingEntityAccessor) localPlayer).nls$jumpPower(), localPlayer.getGravity(), friction,
+			modifiedFriction(0.91, airDragModifier), modifiedFriction(0.98, airDragModifier));
+		double forward = axis(forwardDown, backwardDown);
+		double strafe = inputEnabled ? axis(minecraft.options.keyLeft.isDown(), minecraft.options.keyRight.isDown()) : 0.0;
+		double inputScale = sneakScale / Math.max(1.0, Math.hypot(forward, strafe));
+		movement.tick(
+			forward * inputScale, strafe * inputScale,
+			axis(jumpDown, shiftDown), localPlayer.getYRot(), physics, flying, controls.sprinting(), jumpDown,
+			simulate, synthetic ? syntheticFloor : placeholderLevel.getMinY(), placeholderLevel.getMaxY(), requested -> {
+				Vec3 delta = new Vec3(requested.x(), requested.y(), requested.z());
+				delta = ((PlayerAccessor) localPlayer).nls$backOffFromEdge(delta, MoverType.SELF);
+				delta = ((EntityAccessor) localPlayer).nls$collide(delta);
+				return new PlaceholderMovement.Motion(delta.x, delta.y, delta.z);
+			});
+		if (movement.horizontalCollision() && !flying) controls.stopSprinting();
+		localPlayer.setPos(movement.x(1), movement.y(1), movement.z(1));
+		localPlayer.setOnGround(movement.onGround());
+		updatePose(localPlayer);
+		((LivingEntityAccessor) localPlayer).nls$updateSwimAmount();
+		PlaceholderVisuals.tick(localPlayer,
+			movement.x(1) - movement.x(0), movement.y(1) - movement.y(0), movement.z(1) - movement.z(0));
+		tickArmRotation(localPlayer);
+		SceneRenderer.tickCamera(minecraft);
+		((GameRendererAccessor) minecraft.gameRenderer).nls$hands().tick();
+		interaction.tick();
+		PlaceholderBlockEffects.tick();
+	}
+
+	private static void tickArmRotation(final LocalPlayer localPlayer) {
+		// LocalPlayer.applyInput's visual-only arm lag; leaving these frozen tilts the hand
+		// farther and farther as the camera turns. No special flying hand transform exists.
+		localPlayer.xBobO = localPlayer.xBob;
+		localPlayer.yBobO = localPlayer.yBob;
+		localPlayer.xBob += (localPlayer.getXRot() - localPlayer.xBob) * 0.5F;
+		localPlayer.yBob += (localPlayer.getYRot() - localPlayer.yBob) * 0.5F;
+	}
+
+	private static double modifiedFriction(final double friction, final double modifier) {
+		return Math.clamp(1.0 - (1.0 - friction) * modifier, 0.0, 1.0);
+	}
+
+	private static void updatePose(final LocalPlayer localPlayer) {
+		PlayerEnvironment.sampleFluids(localPlayer);
+		localPlayer.updateSwimming(); // vanilla explicitly clears swimming during ability flight
+		PlayerAccessor pose = (PlayerAccessor) localPlayer;
+		((LocalPlayerAccessor) localPlayer).nls$setCrouching(!localPlayer.getAbilities().flying
+			&& !localPlayer.isSwimming() && !localPlayer.isPassenger() && pose.nls$canFit(Pose.CROUCHING)
+			&& (localPlayer.isShiftKeyDown() || !localPlayer.isSleeping() && !pose.nls$canFit(Pose.STANDING)));
+		if (localPlayer.getAbilities().flying) {
+			// Noclip must not use Player.updatePlayerPose's forced crawling inside solid blocks.
+			localPlayer.setPose(Pose.STANDING);
+		} else {
+			pose.nls$updatePlayerPose();
+		}
+	}
+
+	/** Called after Camera.update aligned the camera, before sky/fog extraction. */
+	public static void refreshEnvironment() {
+		Minecraft minecraft = Minecraft.getInstance();
+		if (installed && level != null && minecraft.level == level) {
+			SceneRenderer.refreshEnvironment(minecraft, level);
+		}
+	}
+
+	/** Position is interpolated once here; eye height, FOV, arms and local animation use live alpha. */
+	public static DeltaTracker prepareRender(final DeltaTracker deltaTracker) {
+		LocalPlayer localPlayer = player;
+		if (!installed || localPlayer == null || Minecraft.getInstance().level != level) {
+			return deltaTracker;
 		}
 
-		float forward = axis(minecraft.options.keyUp.isDown(), minecraft.options.keyDown.isDown());
-		float strafe = axis(minecraft.options.keyLeft.isDown(), minecraft.options.keyRight.isDown());
-		float vertical = axis(minecraft.options.keyJump.isDown(), minecraft.options.keyShift.isDown());
-		if (forward == 0.0F && strafe == 0.0F && vertical == 0.0F) {
-			return;
+		DeltaTracker localTime = LoadingWaitLoop.renderTime(deltaTracker);
+		float partialTick = localTime.getGameTimeDeltaPartialTick(true);
+		localPlayer.setPos(movement.x(partialTick), movement.y(partialTick), movement.z(partialTick));
+		localPlayer.setOldPosAndRot();
+		renderClock.source = localTime;
+		return renderClock;
+	}
+
+	public static DeltaTracker renderDelta(final DeltaTracker deltaTracker) {
+		return isBound() ? renderClock : deltaTracker;
+	}
+
+	private static boolean isBound() {
+		return installed && level != null && Minecraft.getInstance().level == level;
+	}
+
+	/** Only local visuals (player and newly created debris) use the live placeholder clock. */
+	public static float localPartialTick(final float original) {
+		return isBound() ? renderClock.getGameTimeDeltaPartialTick(true) : original;
+	}
+
+	/** Remote entities keep their final pose; the controlled player's animation continues. */
+	public static float entityPartialTick(final Entity entity, final float original) {
+		return isBound() ? (entity == player ? localPartialTick(original) : 1.0F) : original;
+	}
+
+	/** A split clock, not a globally frozen clock: freezing camera alpha quantizes visuals to 20 Hz. */
+	private static final class PlaceholderDeltaTracker implements DeltaTracker {
+		private DeltaTracker source = DeltaTracker.ZERO;
+
+		@Override
+		public float getGameTimeDeltaTicks() {
+			return 0.0F;
 		}
 
-		Vec3 ahead = Vec3.directionFromRotation(0.0F, localPlayer.getYRot());
-		Vec3 left = Vec3.directionFromRotation(0.0F, localPlayer.getYRot() - 90.0F);
-		Vec3 movement = ahead.scale(forward).add(left.scale(strafe)).add(0.0, vertical, 0.0);
-		double length = movement.length();
-		if (length < 1.0E-4) {
-			return;
+		@Override
+		public float getGameTimeDeltaPartialTick(final boolean ignoreFrozenGame) {
+			return ignoreFrozenGame ? this.source.getGameTimeDeltaPartialTick(true) : 1.0F;
 		}
 
-		double speed = minecraft.options.keySprint.isDown() ? 1.6 : 0.6;
-		movement = movement.scale(speed / length);
-		// setPos rather than setDeltaMovement: nothing integrates velocity here.
-		localPlayer.setPos(
-			localPlayer.getX() + movement.x,
-			Mth.clamp(localPlayer.getY() + movement.y, placeholderLevel.getMinY(), placeholderLevel.getMaxY()),
-			localPlayer.getZ() + movement.z
-		);
+		@Override
+		public float getRealtimeDeltaTicks() {
+			return this.source.getRealtimeDeltaTicks();
+		}
 	}
 
 	private static float axis(final boolean positive, final boolean negative) {
@@ -597,9 +776,9 @@ public final class PlaceholderWorld {
 	}
 
 	/**
-	 * Vanilla's {@code handleKeybinds} is suppressed while the placeholder is up — every branch in
-	 * it dereferences the player and half of them talk to the server. Clicks queued in the meantime
-	 * are dropped here rather than left to fire the moment the real world opens.
+	 * Vanilla's {@code handleKeybinds} is suppressed while the placeholder is up. After handling
+	 * local UI and sandbox actions, leftover clicks are dropped rather than left to fire when
+	 * the real world opens.
 	 */
 	public static void discardQueuedClicks() {
 		for (KeyMapping mapping : Minecraft.getInstance().options.keyMappings) {
@@ -607,5 +786,79 @@ public final class PlaceholderWorld {
 				// drain
 			}
 		}
+	}
+
+	/** Handles the few local UI actions that remain useful while the real connection is paused. */
+	public static void handleSafeKeybinds() {
+		if (!installed) {
+			return;
+		}
+
+		Minecraft minecraft = Minecraft.getInstance();
+		while (minecraft.options.keyTogglePerspective.consumeClick()) {
+			CameraType previous = minecraft.options.getCameraType();
+			minecraft.options.setCameraType(previous.cycle());
+			if (previous.isFirstPerson() != minecraft.options.getCameraType().isFirstPerson()) {
+				minecraft.gameRenderer.checkEntityPostEffect(
+					minecraft.options.getCameraType().isFirstPerson() ? minecraft.getCameraEntity() : null
+				);
+			}
+		}
+
+		if (minecraft.options.keyChat.consumeClick() && ClientUi.screen(minecraft) == null) {
+			boolean bound = bind();
+			try {
+				if (bound) {
+					ClientUi.openChat(minecraft, ChatComponent.ChatMethod.MESSAGE);
+				}
+			} finally {
+				if (bound) {
+					unbind();
+				}
+			}
+		}
+
+		if (minecraft.options.keyCommand.consumeClick() && ClientUi.screen(minecraft) == null) {
+			boolean bound = bind();
+			try {
+				if (bound) {
+					ClientUi.openChat(minecraft, ChatComponent.ChatMethod.COMMAND);
+				}
+			} finally {
+				if (bound) {
+					unbind();
+				}
+			}
+		}
+
+		if (minecraft.options.keyInventory.consumeClick() && ClientUi.screen(minecraft) == null && bind()) {
+			try {
+				ClientUi.setScreen(minecraft, new LoadingInventoryScreen(player));
+			} finally {
+				unbind();
+			}
+		}
+
+		if (ClientUi.screen(minecraft) == null && ClientUi.overlay(minecraft) == null && bind()) {
+			try {
+				for (int slot = 0; slot < 9; slot++) {
+					while (minecraft.options.keyHotbarSlots[slot].consumeClick()) PlaceholderInteraction.selectSlot(player, slot);
+				}
+				while (minecraft.options.keySwapOffhand.consumeClick()) PlaceholderInteraction.swapOffhand(player);
+				boolean attack = minecraft.options.keyAttack.consumeClick();
+				boolean use = minecraft.options.keyUse.consumeClick();
+				// Instant sandbox breaking is a press action, not held creative mining. Reuse
+				// vanilla's click queue so turning while held cannot destroy another block.
+				if (attack) interaction.attack(player);
+				if (use || minecraft.options.keyUse.isDown()) interaction.use(player);
+				while (minecraft.options.keyPickItem.consumeClick()) PlaceholderInteraction.pickBlock(player);
+			} catch (Throwable failure) {
+				onRenderFailed(failure);
+			} finally {
+				unbind();
+			}
+		}
+		// Drain unsupported operations and extra clicks; never replay them on the next server.
+		discardQueuedClicks();
 	}
 }

@@ -14,6 +14,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: fabric-26.2
+            java: '25'
+            project: '.'
+            artifacts: 'build/libs/'
+          - target: neoforge-1.21.10
+            java: '21'
+            project: 'platforms/neoforge-1.21.10'
+            artifacts: 'platforms/neoforge-1.21.10/build/libs/'
+          - target: neoforge-1.21.11
+            java: '21'
+            project: 'platforms/neoforge-1.21.11'
+            artifacts: 'platforms/neoforge-1.21.11/build/libs/'
     steps:
       - name: checkout repository
         uses: actions/checkout@v7
@@ -24,7 +40,7 @@ jobs:
       - name: setup jdk
         uses: actions/setup-java@v5
         with:
-          java-version: '25'
+          java-version: ${{ matrix.java }}
           distribution: 'microsoft'
 
       # Caches the Gradle dependency cache, which matters here because Loom pulls
@@ -36,11 +52,11 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: build
-        run: ./gradlew build --stacktrace
+        run: ./gradlew -p ${{ matrix.project }} build check --stacktrace
 
       - name: capture build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: noloadingscreen-dev-build
-          path: build/libs/
+          name: noloadingscreen-${{ matrix.target }}-dev-build
+          path: ${{ matrix.artifacts }}
           if-no-files-found: error

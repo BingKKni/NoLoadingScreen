@@ -1,11 +1,13 @@
 package io.github.bingkkni.noloadingscreen.gui;
 
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.JoinPhase;
+import io.github.bingkkni.noloadingscreen.SavingWorldView;
+import net.minecraft.client.gui.Gui;
 import io.github.bingkkni.noloadingscreen.mixin.LevelLoadingScreenAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.multiplayer.LevelLoadTracker;
 import net.minecraft.network.chat.Component;
@@ -13,14 +15,10 @@ import net.minecraft.server.level.progress.ChunkLoadStatusView;
 import org.jspecify.annotations.Nullable;
 
 /**
- * What is left of {@code LevelLoadingScreen} once the screen itself is gone: the progress bar, the
- * chunk map, and — new — a line of text saying which part of the join you are actually waiting on.
+ * Only the progress bar and status text from the loading UI, never its central chunk rectangle.
  *
- * <p>The bar and the map come straight out of vanilla's own tracker ({@code serverProgress()},
- * {@code statusView()} and the {@code public static extractChunksForRendering} the screen already
- * exposes), drawn in the same place at the same size. That matters: a join crosses a point where
- * the screen has to disappear and the picture has to survive the crossing without moving, or it
- * reads as a flicker rather than as one continuous indicator.
+ * <p>Progress and layout still come from vanilla's tracker. Keeping the text/bar above the old
+ * rectangle's position avoids moving the overlay as the loading screen gives way to the world.
  *
  * <p>Both of those sources are empty in multiplayer — {@code serverChunkStatusView} is only ever set
  * by {@code Minecraft#doWorldLoad} and {@code hasProgress()} needs a {@code LevelLoadListener}
@@ -52,20 +50,18 @@ public final class LoadingHud {
 		return ((LevelLoadingScreenAccessor) screen).nls$loadTracker();
 	}
 
-	/** False on a remote server, where neither of the tracker's two sources is ever populated. */
-	public static boolean hasAnythingToDraw(final @Nullable LevelLoadTracker tracker) {
-		return tracker != null && (tracker.statusView() != null || tracker.hasProgress());
-	}
-
-	public static void draw(final GuiGraphicsExtractor graphics, final @Nullable LevelLoadTracker tracker) {
+	public static void draw(final LoadingCanvas graphics, final @Nullable LevelLoadTracker tracker) {
 		Font font = Minecraft.getInstance().font;
 		int xCenter = graphics.guiWidth() / 2;
 		int yCenter = graphics.guiHeight() / 2;
+		if (SavingWorldView.visible()) {
+			graphics.centeredText(font, ClientUi.savingLevel(), xCenter, graphics.guiHeight() - 50, TEXT_COLOUR);
+			return;
+		}
 
 		int textTop;
 		ChunkLoadStatusView statusView = tracker != null ? tracker.statusView() : null;
 		if (statusView != null) {
-			LevelLoadingScreen.extractChunksForRendering(graphics, xCenter, yCenter, 2, 0, statusView);
 			textTop = yCenter - statusView.radius() * 2 - LINE_HEIGHT * 3;
 		} else {
 			textTop = yCenter - 50;
@@ -96,7 +92,8 @@ public final class LoadingHud {
 				font,
 				Component.translatable("noloadingscreen.hud.configHint"),
 				xCenter,
-				graphics.guiHeight() - LINE_HEIGHT * 3,
+				// Keep the hint above the hotbar/inventory area instead of drawing through its slots.
+				graphics.guiHeight() - LINE_HEIGHT * 5,
 				HINT_COLOUR
 			);
 		}

@@ -3,7 +3,7 @@
 	"id": "noloadingscreen",
 	"version": "${version}",
 	"name": "NoLoadingScreen",
-	"description": "Removes the loading screens from joining a world. \"Loading terrain\" and \"Reconfiguring\" are replaced by the world itself — or, while none exists yet, by a void with a free camera — so a join is something to look at rather than a panel to sit through. No packet is created, delayed or reordered.",
+	"description": "Removes the loading screens from joining a world. \"Loading terrain\" and \"Reconfiguring\" are replaced by the world itself — or, while none exists yet, by a void with a free camera — so a join is something to look at rather than a panel to sit through. No protocol packet is fabricated, dropped or reordered; loading-time packet handling is spread across frames, so handling and replies may occur later.",
 	"authors": [
 		{
 			"name": "小布丁 (BingKKni)",
@@ -22,7 +22,7 @@
 	"environment": "client",
 	"entrypoints": {
 		"client": [
-			"io.github.bingkkni.noloadingscreen.NoLoadingScreen"
+			"io.github.bingkkni.noloadingscreen.platform.FabricBootstrap"
 		],
 		"modmenu": [
 			"io.github.bingkkni.noloadingscreen.compat.ModMenuIntegration"

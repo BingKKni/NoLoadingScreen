@@ -1,5 +1,7 @@
 # NoLoadingScreen: Implementation Details and Measurements
 
+> API names and older measurements below describe Fabric26.2. NeoForge1.21.10/.11 compile-time adapters, exact dependencies and independently verified limits are documented in [NEOFORGE.md](NEOFORGE.md). The feature state machines remain shared.
+
 [Back to English README](../README.md) | [简体中文技术文档](TECHNICAL_DETAILS.zh-CN.md)
 
 > This document is intended for developers who want to understand the internal implementation, compatibility design, and testing process. For installation and everyday use, see the project README.
@@ -23,7 +25,7 @@
 3. **State clearly what is currently being awaited.** Vanilla's panel contains no text at all when switching servers. This mod displays the current phase
    (starting world / synchronizing data / waiting for world / receiving chunks) and the elapsed wait time, and writes a one-line phase breakdown to the log for every world entry.
 
-This is a client-only Fabric mod that **does not create, intercept, delay, or reorder any packet sent to the server**.
+This client-only Fabric mod **does not fabricate, drop or reorder protocol packets**. Loading-time incoming packet handling is spread across frames, so handling and vanilla replies can occur later. World mutation stays on its owning thread.
 
 > **WARNING: To be clear about what this mod does not do: it does not make world entry faster.**
 > A client mod cannot save even one second of the time spent by the server. Hypixel's "Reconfiguring" phase during a server switch is the server resending registries and tags,
@@ -99,9 +101,9 @@ and **all chunks have already been meshed**. The best solution is therefore not 
 
 The result is **the place you just left, frozen in time**, with free camera rotation. **No objects are instantiated anywhere along this path.**
 
-#### Singleplayer World Load: Synthesize a Void
+#### Initial World Load: Synthesize a Void
 
-There is nothing to adopt when opening a singleplayer world, so construction is required only here: a complete, ordinary `ClientLevel`
+There is nothing to adopt when opening singleplayer or initially connecting to a server, so these paths construct a complete, ordinary `ClientLevel`
 (empty chunks, plains biome, noon, clear weather) and a `LocalPlayer` standing in it.
 
 **WARNING: Constructing a `ClientPacketListener` has a cost, which was discovered only through testing on a real client:** its constructor is hooked by other mods.
@@ -114,10 +116,22 @@ java.lang.IllegalStateException
     at ClientPacketListener.<init>
 ```
 
-**Therefore, only the singleplayer world-load path constructs one**, and that path happens to be safe: no play session exists at that time, which is precisely why there is nothing to adopt.
+**Construction is restricted to initial loading before a real play listener exists.** Server transfers adopt the outgoing world instead.
 Even so, the global slot is saved before construction and restored afterward (see `PlayAddonGuard`). Otherwise, this listener, which is about to be discarded,
 would continue to occupy the slot and cause the same exception when the real listener is created. At that point, world entry would already be in progress and could not recover.
 If the slot cannot be accessed safely because of internal Fabric changes, this mod **declines to construct the placeholder** and falls back to the vanilla screen.
+
+#### Placeholder Movement and Frozen Rendering
+
+The separate 20-tick-per-second movement model inherits velocity, sprint state, movement/flight speed attributes and the outgoing player's ability-flight state. Fresh synthetic players still start walking, without inheriting the previous placeholder's flight. The transient transfer screen retains held keys. Airborne movement uses air acceleration/drag, jumping uses vanilla jump strength, gravity and sprint-jump impulse, and held Space repeats jumps on landing. Double-W or the sprint key starts sprinting; double-Space toggles flight. A Space key already held at handoff is not a fresh double-tap.
+
+Walking uses vanilla collision, step-up and sneaking-edge queries without calling the gameplay-affecting `Entity.move`. Only flight bypasses collision. The empty singleplayer placeholder has a local virtual footing at its initial height, without placing blocks. No player gameplay tick runs; this does not replicate all vanilla water, ladder or vehicle physics. Inventory/chat screens suppress movement input, not momentum or gravity. Only disabling the movement configuration stops the movement simulation.
+
+The controlled position is interpolated exactly once between movement ticks. The split render clock keeps environment partial ticks at `1`, but passes live partial ticks to camera eye height/FOV, arms and local avatar animation. `EntityRenderDispatcher` pins all other entities to `1`, avoiding replay of their final tick. Freezing the camera's alpha too was a bug: otherwise smooth FOV/eye-height/arm updates become 20 Hz steps regardless of FPS. Rendering frequency does not advance movement simulation.
+
+Sky rendering retains the old world's biomes, clocks and environment attributes. In 26.2, world teardown clears `Camera.attributeProbe`, and placeholder rendering does not run vanilla `GameRenderer.tick`. Restoring the camera entity alone therefore leaves black default sky colors and a default sun angle. We refresh the probe after camera alignment, before sky/fog extraction, and seed the synthetic world's noon clock before constructing `ClientLevel` so its cached brightness is correct.
+
+Only local visual state advances: vanilla crouching/swimming poses, swim interpolation, arm-rotation smoothing, camera eye-height/FOV, walking/bob/cloak state, head/body turning, animation age and completion of captured swings. Ability flight leaves swimming/crouching poses; no custom hand transform is applied. No entity tick or gameplay AI is invoked.
 
 #### Why This Is Safe for the Server
 
@@ -131,13 +145,12 @@ If the slot cannot be accessed safely because of internal Fabric changes, this m
 - As soon as the real world arrives, the entire placeholder is discarded, and vanilla creates the real player at the vanilla point in time using **the position and view rotation supplied by the server**.
   None of the rotation or movement performed in the void carries over, so the server has nothing to correct,
   and there is no scenario in which "the client moves several blocks early and gets pulled back."
-- **Binding occurs only during a single rendered frame.** `minecraft.level` / `player` / `gameMode` are populated only around the `renderFrame` call and mouse-look rotation,
-  then immediately restored to null. Therefore, **every client tick, every packet handler, and every other mod still sees vanilla's
-  null values**. This is the key to minimizing the affected surface area.
+- **Binding is scoped to individual calls and released in finally blocks.** Rendering, mouse look, initialization, the entire local movement/visual update and necessary UI initialization/clicks temporarily see the placeholder. Initializing a pose before binding caused the reported singleplayer null-connection error: `updateSwimming` reaches `AbstractClientPlayer.getPlayerInfo`, which calls `Minecraft.getConnection`. The whole `Minecraft.tick` and connection driver are never bound; normal gameplay ticks, packet handlers and lifecycle events still see vanilla's absent world.
 
 The only place requiring additional handling is `Minecraft#handleKeybinds`. Vanilla reaches it only when no screen is open, and in vanilla,
-"no screen is open" implies that a player exists. Every branch dereferences `this.player`, and half the branches also send packets. It is therefore skipped entirely while the placeholder is active
-(clicks accumulated during that period are discarded as well, preventing them from firing all at once when the world opens).
+"no screen is open" implies that a player exists. Many branches dereference `this.player` or send packets. Perspective, chat/command-screen keys, E, number keys/wheel, F and local left/right actions remain enabled; leftover gameplay clicks are drained. Loading disables completion requests and blocks submissions at both the chat screen and `ClientPacketListener.sendChat/sendCommand`, with separate red messages. E opens `LoadingInventoryScreen`, an AbstractContainerScreen using the disposable player's inventory and vanilla player preview, with no extra warning labels. Its slot handler bypasses MultiPlayerGameMode and uses local menu logic; crafting, dropping and network-backed mouse extensions are disabled. Input callbacks and the final container tick receive scoped bindings; onClose/removed skip vanilla's packet-sending close/drop paths. The configuration connection is still driven independently.
+
+`PlaceholderInteraction` raycasts afresh against the old ClientLevel: left-click immediately replaces the block with a client setBlock call (no mining controller or loot); right-click invokes only BlockItem.place, not useOn/use, retaining vanilla placement checks and consuming one item on success. Hotbar and offhand actions only modify the disposable inventory. ItemInHandRenderer and the swap timer advance separately; swing uses the two-argument overload that sends no client packet. Uninstall discards all edits and releases held attack/use keys so they cannot continue on the new server.
 
 #### It Must Not Be Allowed to Crash the Game
 
@@ -184,10 +197,9 @@ In addition, after the placeholder world fails three times during the current ru
 The vanilla state machine then advances normally. The loading screen closes and `ServerboundPlayerLoadedPacket` is still sent by vanilla code on the same tick,
 in the vanilla order.
 
-This is why it is safe with anti-cheat systems: **the mod does not send any packet to the server.** The "ready packet"
-(`ServerboundPlayerLoadedPacket`, introduced in 1.21.4) is already part of vanilla's mechanism; this mod merely causes it to trigger earlier.
+The mod does not fabricate a ready packet: `ServerboundPlayerLoadedPacket` (introduced in 1.21.4) remains vanilla's mechanism, triggered earlier. This changes client readiness timing and is not proof of acceptance by every anti-cheat policy; validate on an authorized test server.
 
-The gate always opens immediately without waiting for the server to begin sending chunks. If the player's chunk has not arrived yet, the mod holds the player in place until it does, preventing client physics from dropping the player into the void.
+The gate always opens immediately without waiting for the server to begin sending chunks. If the player's chunk has not arrived yet, the mod holds the player in place until it does, preventing client physics from dropping the player into the void. The anchor belongs to that player and follows absolute/relative teleports after vanilla resolves and acknowledges them. It never restores an old spawn point, locks yaw/pitch, or fabricates `onGround=true` (which cancels vanilla flight). Teardown, disconnect and disabling the mod clear the hold.
 
 ### 3. Singleplayer No Longer Spins Idly
 
@@ -225,40 +237,91 @@ if (this.connection.isConnected()) {
 }
 ```
 
-`Minecraft` itself ticks only *pending* connections. Once the screen is gone, the connection stops advancing and remains stuck until it times out.
-This mod **keeps the screen object and continues ticking it, but detaches it from the Gui**. The mod invokes its
-`tick()` directly on every client tick, without changing a single line of vanilla logic. Even the 600-tick delay for the "Disconnect" button continues to run.
+`Minecraft` itself ticks only *pending* connections. Once the screen is gone, the configuration connection needs a new owner.
+The mod retains the original screen and directly calls vanilla's `ServerReconfigScreen.tick()` once per client tick until login or disconnect, rather than duplicating its connection-update branch. Opening another screen does not relinquish that ownership. If the original reconfiguration screen is mounted, vanilla ticks it instead, avoiding double ticks.
 
-**Pressing Esc restores this screen at any time**, because its "Disconnect" button is the only way out during the configuration phase (Esc does nothing there in vanilla).
-A void that cannot be exited would be a trap. This hint remains displayed at the bottom of the void view.
+**Pressing Esc opens a loading menu with “Back to Game” and an immediately enabled “Disconnect” button.** It does not wait for vanilla's 600-tick delay. Disconnects still go through the original connection listener. Unexpected disconnects enter KickWarn: the local scene stays indefinitely and chat immediately displays the original reason, colours and line breaks. Deliberate exits, successful protocol transfers and singleplayer errors do not enter KickWarn. Explicitly leaving for menus clears the scene and rendering-engine references.
+
+### 5. Singleplayer Save-and-Quit View
+
+`SavingWorldView` captures and adopts the disconnected outgoing scene. `LoadingWaitLoop` polls input, runs the existing local movement/animation and inventory controls on an independent 20 Hz clock, and renders mouse look each frame. It never calls Minecraft/player/connection ticks or drains general tasks during saving. Gui permits null-screen handling only for the bound saving player while retaining the real teardown flag; the saving message moves to the HUD.
+
+The original `server.isShutdown()` wait and save order remain intact. The scene and clock are released before vanilla's final screen/engine teardown and again idempotently in `finally`. Cosmetic failures restore the saving screen. The outgoing environment remains frozen; this is **not a per-chunk unload animation** and local edits are not saved.
+
+Input dispatch uses chainable `@WrapOperation` hooks in `MouseHandler` and `KeyboardHandler`. Competing `@Redirect` hooks previously caused ViaFabricPlus 4.6.1's `storeEvent` injection to fail at startup. Only client-thread input polled by the local wait executes immediately; all other input delegates to the original operation chain, preserving other mods' scheduling. The optional `verifyInputCompatibility` task tests transformations with a supplied, unmodified ViaFabricPlus jar; it is not a full gameplay or server-compatibility test.
+
+### 6. Early Resource Preparation and Initial Multiplayer Login
+
+Singleplayer enters the placeholder at `WorldOpenFlows.openWorldLoadLevelStem`'s resource-preparation screen. A scoped managedBlock predicate adds local frames while preserving vanilla completion-task pumping and failure/prompt ownership. Initial multiplayer marks encryption (joining for offline servers) in the off-thread status callback, then installs on the client tick. The hidden ConnectScreen remains the connection owner; mounted screens are not double-ticked, successful login does not close the connection, and cancellation preserves vanilla's aborted/channelFuture synchronization.
+
+`PlaceholderRegistries` asynchronously decodes vanilla client registries before a WorldStem exists, including private copies of static registry holders and tags. It never applies local tags to global registries or server listeners. Unready/failed warm-up keeps vanilla UI available. See [implementation and limitations (Chinese)](LOADING_IMPROVEMENTS.zh-CN.md) and the [in-game checklist (Chinese)](TESTING.zh-CN.md).
+
+Version 1.0.4 keeps the same early scene/camera across resource preparation and `doWorldLoad`, skipping only redundant empty-session cleanup and retaining vanilla's new tracker. The placeholder local player bypasses only LevelExtractor's compiled-section visibility check; vanilla still renders the player. The loading HUD omits the central chunk-status rectangle.
+
+Saving, configuration and KickWarn share an `OutgoingWorld` snapshot. KickWarn runs vanilla's real disconnection cleanup while keeping the scene/meshes, with the original error screen as a fallback and return-destination source. Left-click uses vanilla press events rather than repeatedly breaking blocks while held.
+
+Version 1.0.5 converts adventure/spectator controllers to survival only in the bound KickWarn scene. Local player mode queries reuse that controller without mutating shared PlayerInfo. Middle-click uses vanilla block cloning, block-entity serialization/component collection and Inventory selection to preserve client-available data such as head textures; it does not send server pick/query packets. See the [incremental details (Chinese)](LOADING_IMPROVEMENTS.zh-CN.md).
+
+### 7. Skin Handoff and Loading Work Scheduling (1.0.5 Increment)
+
+The real local player temporarily uses the completed account skin while PlayerInfo or server textures are pending. Vanilla lookup runs first to start loading; completed custom/default server skins and empty results take precedence. Other players are unaffected.
+
+During loading, the client packet drain has an 8 ms soft budget and ordinary frame tasks have a 4 ms budget. Yielding happens between complete handlers, preserving FIFO, thread ownership and error handling. Vanilla synchronous terrain builds use `compileAsync`; an optional Sodium hook skips the `awaitCompletion` path that waits for workers and steals pending builds onto the render thread. Explicit full-frame capture mode still waits. Protection continues for five seconds after early readiness, then normal gameplay policy resumes. The synthetic void uses at most two chunks of effective render distance without writing user options.
+
+Individual operations are not preempted: renderer teardown, GPU uploads/shader compilation, registry application and other mods' callbacks can still stall. Limited `[loading-work]` diagnostics identify calls exceeding 100 ms. Actual client logs also confirmed ViaFabricPlus 4.6.2 still accesses the live channel in a RETURN hook, so adoption now runs after the entire handler returns. An occupied Fabric play-addon slot prevents synthesis instead of triggering a constructor failure.
+
+See [evidence and limitations (Chinese)](LOADING_IMPROVEMENTS.zh-CN.md) and [cold/warm-start testing (Chinese)](TESTING.zh-CN.md). Headless regressions and checks with actual Sodium/Fabric API/ViaFabricPlus jars passed; full modpack FPS and real-server validation remain pending.
+
+### 8. First-Join Cold Start (Further 1.0.5 Changes)
+
+User logs still showed a 367 ms login handler and a 782 ms packet drain. An isolated RX 580/OpenGL JFR recording sampled JAR reads, class loading and Mixin transformations during first placeholder installation. Startup now resolves selected first-join type signatures without executing initializers or constructors and without concurrent class-loading workers. The three actual supported Sodium terrain pipelines are also precompiled before world entry, on the owning GPU thread.
+
+The synthetic void uses one worker. The first redundant Sodium reload is coalesced only for an unused renderer at the same distance and resource generation; resource reloads, use/edits and unloading invalidate that exemption. An occupied Fabric configuration addon now also prevents synthetic PLAY construction. Slow diagnostics identify packet classes and Sodium initialization/teardown and include directly pumped resource-wait frames.
+
+Headless regressions and the optional `verifyColdStartGpu` passed. The real graphics test renders only a placeholder, without opening saves or connecting to servers. With type warm-up, isolated first installation measured about 195-197 ms, so stalls are not eliminated; startup completion takes longer and full-modpack/real-terrain testing remains necessary. See [evidence (Chinese)](LOADING_IMPROVEMENTS.zh-CN.md) and [test commands (Chinese)](TESTING.zh-CN.md).
 
 ### Mixin Inventory
 
-Nine Mixins (three of which are accessors), all implemented with `@Inject` / `@Redirect` / `@ModifyVariable` / `@WrapMethod`,
+The main Mixins and accessors use `@Inject` / `@Redirect` / `@ModifyVariable` / `@WrapMethod` / `@WrapOperation`,
 with **no `@Overwrite`**:
 
 | Class | Injection Point | Purpose |
 |---|---|---|
+| `PacketProcessor` | `processQueuedPackets` / queue check | Yield between whole incoming packets during client loading, without dequeuing/reordering |
+| `Minecraft` | `runTick` task scope / `shouldRun` | Budget ordinary frame tasks; preserve synchronous completion waits |
+| `LevelRenderer` | `compileSections` -> `compileSync` | Use vanilla asynchronous compilation while loading |
+| `Options` | `getEffectiveRenderDistance` | Limit only synthetic void allocations without writing configuration |
+| Sodium `RenderSectionManager` (optional) | `updateChunks` -> `awaitCompletion` | Leave builds on workers while loading, except explicit full-frame capture |
 | `Minecraft` | `renderFrame` `@WrapMethod` | Bind/unbind the placeholder world during a rendered frame, provide the exception safety net, and return the swapchain image |
 | `Minecraft` | `runTick` -> `handleAccumulatedMovement` | Invoke after binding so the mouse can rotate the placeholder player's view |
 | `Minecraft` | `handleKeybinds` HEAD | Skip the entire method while the placeholder is active (see above) |
 | `Minecraft` | `doWorldLoad` -> `IntegratedServer.isReady` | Remove idle spinning during startup |
-| `Minecraft` | `doWorldLoad` RETURN | Singleplayer: install the placeholder world |
+| `Minecraft` | `doWorldLoad` → `disconnectWithProgressScreen` / `Gui.setScreen` | Retain the early scene/camera and capture vanilla's tracker before hiding its screen |
 | `Minecraft` | `setScreenAndShow` -> `renderFrame` | Skip the forced render of that frame when the screen is discarded, eliminating the black flash |
-| `Minecraft` | `tick` HEAD | Drive the detached "Reconfiguring" screen and tick the placeholder world |
+| `Minecraft` | `tick` HEAD / `pauseGame` HEAD | Drive the configuration connection and placeholder movement / open the loading menu |
 | `Minecraft` | `clearClientLevel` -> `updateLevelInEngines` | Preserve chunk meshes during a server switch so the old world remains on screen |
 | `Minecraft` | `clearClientLevel` / `setLevel` / `disconnect` | Return the rendering engine and record diagnostic phase boundaries |
 | `ClientPacketListener` | `handleConfigurationStart` x2 | Server switch: snapshot the old world -> install the placeholder world |
-| `ClientPacketListener` | `handleLogin` HEAD | Remove the placeholder world when the real world arrives |
+| `ClientPacketListener` | `handleLogin`, after the thread check | Remove the placeholder world when the real world arrives |
 | `ClientPacketListener` | `<init>` RETURN | Checkpoint: configuration phase complete |
 | `ClientPacketListener` | `startWaitingForNewLevel` RETURN | Remove the retained loading screen in singleplayer |
 | `LevelLoadTracker` | `startClientLoad` / `loadingPacketsReceived` / `tickClientLoad` / `isLevelReady` | Gate logic |
 | `Gui` | `setScreen` HEAD / `extractRenderState` | Discard the loading screen / render the minimal loading screen |
+| `GameRenderer` | `update` / `extract` / `render` | Split live local visuals from frozen environment time |
+| `EntityRenderDispatcher` | `extractEntity` | Live local avatar animation; frozen partial tick for other entities |
+| `MouseHandler` | `onScroll` | Scoped binding for vanilla fractional wheel/hotbar selection |
+| `Gui` | `tick` → `Hud.tick` | Bind only the existing vanilla HUD tick so selected-item detection and countdowns advance normally |
+| `Gui` | `tick` → `Screen.tick` | Bind only the local inventory's final tick |
 | `Hud` | `extractRenderState` TAIL | Loading-information overlay |
-| `LocalPlayer` | `aiStep` TAIL | Lock the position until the chunk arrives, then restore normal physics |
+| `LocalPlayer` | `aiStep` HEAD / TAIL | Hold position without fabricating a landing or locking mouse look |
+| `ClientPacketListener` | `handleMovePlayer` RETURN | Follow server teleports after vanilla resolves and acknowledges them |
+| `Minecraft` | `disconnect` wrapper / before saving screen / engine teardown | Adopt saving or KickWarn scenes; retain offline camera/meshes, release actual connection ownership |
+| `ClientHandshakePacketListenerImpl` | `onDisconnect` → `Gui.setScreen` | Route failed login with an existing scene through normal cleanup/KickWarn |
+| `DisconnectedScreen` | `parent` / `details` accessors | Reuse vanilla's destination, original reason and error details |
+| `LevelExtractor` | `isEntityVisible` → `isSectionCompiledAndVisible` | Show the bound placeholder local player without terrain meshes |
 | `ClientCommonPacketListenerImpl` | `connection` field (accessor) | Replace the adopted old listener's connection with a dead connection |
 | `LevelLoadingScreen` | `loadTracker` field (accessor) | Retrieve the tracker displayed by the screen so the overlay can continue rendering it |
-| `ServerReconfigScreen` | `connection` / `delayTicker` fields (accessors) | Preserve the elapsed wait time when restoring the screen |
+| `ServerReconfigScreen` | `connection` / `disconnectButton` fields (accessors) | Keep driving the connection and enable immediate disconnection in the fallback screen |
 
 ---
 
@@ -269,7 +332,7 @@ Open the configuration through Mod Menu, or edit `.minecraft/config/noloadingscr
 | Option | Default | Description |
 |---|---|---|
 | Enable Mod | On | When disabled, all behavior is exactly the same as vanilla, and no logs are written |
-| Allow Movement While Loading | On | Allows movement-key flight while the placeholder is active, with Space to rise and Shift to sink; this is purely local and sends no packets |
+| Allow Movement While Loading | On | Walk, sprint and jump locally; double-Space toggles flight/noclip, then Space/Shift ascend/descend; no packets are sent |
 | Loading Information Overlay | On | After the screen is removed, continue rendering phase text, elapsed wait time, and a progress bar on the HUD |
 | Show World-Entry Duration | Off | After each world entry, print the total duration and phase breakdown in chat. **The result is still written to `latest.log` when this is off** |
 
@@ -290,9 +353,8 @@ The last item applies at a different stage from "Allow Movement While Loading." 
 ## Compatibility and Known Limitations
 
 - **Client-only**; the server does not need the mod.
-- **Verified to coexist with Sodium 0.9.2-alpha.4.** Sodium replaces the chunk builder, while the gate depends on its "meshing complete" signal.
-  Testing found no conflict between the two (this mod bypasses the wait and does not participate in meshing). The placeholder world triggers two additional `LevelExtractor.setLevel` calls
-  (one when installed and one when removed).
+- **Private Sodium hooks are enabled only for the current stable verified build.** Target layouts and behavior pass for `0.9.2+mc26.2`; unknown or pre-release versions safely skip those private optimizations. Installing/removing the placeholder can still rebuild renderers and stop workers, and GPU-resource teardown is not moved wholesale to another thread.
+- **A real-jar headless target-transformation matrix covers common Fabric optimizers.** The combined profile includes Iris 1.11.4, ImmediatelyFast 1.16.4, Lithium 0.25.3, FerriteCore 9.0.0, EntityCulling 1.10.5, MoreCulling 1.8.1, Dynamic FPS 3.11.9, Sodium Extra 0.9.3, RRLS 5.2.8, Sodium 0.9.2, and ViaFabricPlus 5.0.1; additional profiles cover Bobby 5.2.15, Distant Horizons 3.2.0-b, FastQuit 3.1.5 and Reese's Sodium Options 2.2.3. This proves the NoLoadingScreen hooks survive those exact transformations, not GPU or gameplay behavior. Except for exact Sodium-private optimizations, production compatibility uses existing chainable vanilla targets rather than fragile third-party internals.
 - **WARNING: During placeholder-world rendering, other mods see the placeholder world inside rendering hooks.** Binding occurs only within one rendered frame,
   so tick events and packet handlers still see vanilla's `null`; however, a mod that makes strong assumptions about
   `mc.level` / `mc.player` inside a rendering callback could theoretically behave incorrectly. The placeholder cannot currently be disabled separately;
@@ -303,6 +365,8 @@ The last item applies at a different stage from "Allow Movement While Loading." 
 - If you encounter a problem, first turn off "Enable Mod" and reproduce it once to confirm whether this mod is responsible, then open an [issue](https://github.com/BingKKni/NoLoadingScreen/issues) with the log.
 
 ### Verification Status
+
+The current build runs two repeatable checks through `./gradlew build`: `movementTest` (speeds, sprint-jump momentum, ground/wall collision, double-tap controls, damping and interpolation) and `verifyMixins` (headless Fabric target transformation, connection ownership, original disconnect reasons, cleanup, loading-menu buttons, perspective/held keys, message guards, sky probe, arm smoothing, null-connection initialization/update regression, split render clocks, avatar animation, menu physics, local breaking/placement rules, key and fractional-wheel routing, local inventory lifecycle, and offline-placeholder selected-item switching/countdown/pause/empty-slot clearing). The optional `verifyOptimizationCompatibility` task runs a combined transformation matrix with caller-supplied real mod jars. The verifier exits before opening a game window and is excluded from the distributable JAR. These checks do not replace testing transfers on a real multiplayer server. The real-client measurements below describe earlier testing, not validation of this update.
 
 - `./gradlew build` passes.
 - **All Mixins were confirmed to apply in practice.** A temporary `preLaunch` entry point forcibly loaded every target class to trigger Mixin transformation,
@@ -340,12 +404,12 @@ cd NoLoadingScreen
 ./gradlew build
 ```
 
-The artifact is written to `build/libs/noloadingscreen-1.0.0.jar`. **JDK 25** is required.
+The artifact is written to `build/libs/noloadingscreen-1.0.5.jar`. **JDK 25** is required.
 
 To publish a release, push a tag beginning with `v`. CI uses the version number from the tag to build and automatically create a GitHub Release with the jar attached.
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.5 && git push origin v1.0.5
 ```
 
 > Minecraft 26.1 is the first stable release whose client is **not obfuscated**; 1.21.11 was the last obfuscated release ([Mojang announcement](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition), [Fabric confirmation](https://fabricmc.net/2026/03/14/261)). The 26.1 `version_manifest` no longer contains `client_mappings`, and Yarn stopped at 1.21.11.

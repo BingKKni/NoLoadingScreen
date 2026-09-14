@@ -10,6 +10,8 @@ package io.github.bingkkni.noloadingscreen;
  */
 public enum JoinPhase {
 	NONE("none"),
+	PREPARING_RESOURCES("preparingResources"),
+	CONNECTING("connecting"),
 	/** Singleplayer only: the integrated server is starting up and has not accepted a login yet. */
 	SERVER_BOOT("serverBoot"),
 	/** Configuration phase — registries, tags and resource packs. Entirely server-paced. */

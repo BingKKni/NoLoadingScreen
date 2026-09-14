@@ -1,11 +1,24 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
+import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
+import io.github.bingkkni.noloadingscreen.DisconnectedWorldView;
+import net.minecraft.client.gui.screens.ChatScreen;
+import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig;
+import io.github.bingkkni.noloadingscreen.SavingWorldView;
 import io.github.bingkkni.noloadingscreen.gui.LoadingHud;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.Hud;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.LevelLoadTracker;
@@ -31,26 +44,60 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  */
 @Mixin(Gui.class)
 public abstract class GuiMixin {
+	@WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/Hud;tick(Z)V"))
+	private void nls$tickPlaceholderHud(final Hud hud, final boolean paused, final Operation<Void> original) {
+		// Rendering is bound, so vanilla can draw the selected-item name. Its countdown, however,
+		// lives in Hud.tick and normally sees Minecraft.player == null between placeholder frames.
+		// Bind only this existing HUD tick: the timer and item-change detection advance exactly once,
+		// without exposing the disposable player to Gui's death/sleep/screen lifecycle checks.
+		boolean bound = PlaceholderWorld.bind();
+		try {
+			original.call(hud, paused);
+		} finally {
+			if (bound) PlaceholderWorld.unbind();
+		}
+	}
+
+	@WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/screens/Screen;tick()V"))
+	private void nls$tickLocalInventory(final Screen screen, final Operation<Void> original) {
+		if (!(screen instanceof LoadingInventoryScreen)) {
+			original.call(screen);
+			return;
+		}
+		// AbstractContainerScreen.tick is final and dereferences the player. Scope this binding to
+		// just the screen call; the separate wrapper above owns the one HUD tick that needs a player,
+		// while Gui's death/sleep/screen lifecycle and the configuration connection remain unbound.
+		if (!PlaceholderWorld.bind()) return;
+		try {
+			original.call(screen);
+		} finally {
+			PlaceholderWorld.unbind();
+		}
+	}
+
+	@WrapMethod(method = "setScreen")
+	private void nls$returnToPlaceholder(final Screen screen, final Operation<Void> original) {
+		io.github.bingkkni.noloadingscreen.ScreenTransitions.setScreen(screen, original);
+	}
+
+	@ModifyExpressionValue(method = "setScreen", at = @At(value = "FIELD", target = "Lnet/minecraft/client/gui/Gui;clientLevelTeardownInProgress:Z"))
+	private boolean nls$allowLocalSavingUi(final boolean teardown) {
+		// Keep the real teardown flag set (including canInterruptWithAnotherScreen). Only the
+		// null-screen guard may accept our bound, disconnected saving/KickWarn player.
+		return teardown && !((SavingWorldView.visible() || DisconnectedWorldView.visible()) && Minecraft.getInstance().player != null
+			&& PlaceholderWorld.owns(Minecraft.getInstance().player));
+	}
+
+	@Redirect(method = "setScreen", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/KeyMapping;releaseAll()V"))
+	private void nls$keepHeldTransferKeys() {
+		// The transient reconfiguration screen is removed in the same packet handler. Releasing
+		// here invents a key-up/key-down edge and interrupts sprint-jumps. Real menus still release.
+		if (!NoLoadingScreen.shouldKeepEnginesForAdoption()) KeyMapping.releaseAll();
+	}
+
 	@ModifyVariable(method = "setScreen", at = @At("HEAD"), argsOnly = true)
 	private Screen nls$interceptScreen(final Screen screen) {
-		if (screen instanceof LevelLoadingScreen) {
-			NoLoadingScreen.markTimeline("地形加载界面出现 (加载地形中...)");
-		} else if (screen == null && NoLoadingScreen.timelineActive()) {
-			NoLoadingScreen.markTimeline("加载界面关闭，画面交还给玩家");
-		}
-
-		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
-		if (config.enabled && screen instanceof LevelLoadingScreen) {
-			// Only when a level is actually there to look at. Before the login packet arrives there
-			// is no ClientLevel, and setScreen(null) would answer that with the title screen — the
-			// placeholder world covers that window instead, and drops its own screen from install().
-			if (Minecraft.getInstance().level != null) {
-				NoLoadingScreen.markTimeline("NoLoadingScreen 隐藏了地形加载界面，直接交还画面");
-				return null;
-			}
-		}
-
-		return screen;
+		return io.github.bingkkni.noloadingscreen.ScreenTransitions.intercept(screen);
 	}
 
 	/**
@@ -77,10 +124,10 @@ public abstract class GuiMixin {
 			&& screen instanceof LevelLoadingScreen loadingScreen
 			&& Minecraft.getInstance().level == null) {
 			LevelLoadTracker tracker = LoadingHud.trackerOf(loadingScreen);
-			// Vanilla's panorama/menu background, then our own progress bar, chunk map and status
-			// line in place of vanilla's — same position, same size, one more line of text.
+			// Cosmetic fallback: keep vanilla's background, but only the progress bar and text.
+			// The central chunk-status rectangle is intentionally absent.
 			screen.extractBackground(graphics, mouseX, mouseY, partialTick);
-			LoadingHud.draw(graphics, tracker);
+			LoadingHud.draw(new io.github.bingkkni.noloadingscreen.gui.LoadingCanvas(graphics), tracker);
 			return;
 		}
 

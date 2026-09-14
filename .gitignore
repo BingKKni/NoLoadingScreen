@@ -36,6 +36,7 @@ run/
 
 log/
 .opencode/
+.workbuddy-ai/
 .claude/RESUME.md
 
 # java

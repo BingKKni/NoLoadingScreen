@@ -31,6 +31,7 @@ import org.jspecify.annotations.Nullable;
 final class PlayAddonGuard implements AutoCloseable {
 	private static final String IMPL = "net.fabricmc.fabric.impl.networking.client.ClientNetworkingImpl";
 	private static final String ADDON_TYPE = "ClientPlayNetworkAddon";
+	private static final String CONFIG_ADDON_TYPE = "ClientConfigurationNetworkAddon";
 
 	/** Logged once: a repeated warning every join would be worse than the problem. */
 	private static boolean warned;
@@ -56,11 +57,21 @@ final class PlayAddonGuard implements AutoCloseable {
 		}
 
 		try {
+			Field playSlot = null;
+			Field configSlot = null;
 			for (Field candidate : impl.getDeclaredFields()) {
-				if (Modifier.isStatic(candidate.getModifiers()) && candidate.getType().getSimpleName().equals(ADDON_TYPE)) {
-					candidate.setAccessible(true);
-					return new PlayAddonGuard(candidate, candidate.get(null));
-				}
+				if (!Modifier.isStatic(candidate.getModifiers())) continue;
+				String type = candidate.getType().getSimpleName();
+				if (type.equals(ADDON_TYPE)) playSlot = candidate;
+				else if (type.equals(CONFIG_ADDON_TYPE)) configSlot = candidate;
+			}
+			if (playSlot != null && configSlot != null) {
+				playSlot.setAccessible(true);
+				configSlot.setAccessible(true);
+				// Fabric rejects PLAY construction while CONFIGURATION is owned too. Never
+				// clear either live slot to make a cosmetic listener fit.
+				if (playSlot.get(null) != null || configSlot.get(null) != null) return null;
+				return new PlayAddonGuard(playSlot, null);
 			}
 		} catch (Throwable t) {
 			return warnAndRefuse(t);

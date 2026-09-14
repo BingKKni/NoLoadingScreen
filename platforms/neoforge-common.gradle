@@ -1,0 +1,191 @@
+apply plugin: 'java-library'
+
+// Separate builds keep mapped Java 21 dependencies out of the Fabric 26.2 Loom classpath.
+def rootProperties = new Properties()
+file('../../gradle.properties').withInputStream { rootProperties.load(it) }
+version = providers.gradleProperty('version').getOrElse(rootProperties.getProperty('version'))
+group = rootProperties.getProperty('group')
+base.archivesName = "noloadingscreen-neoforge-${minecraftVersion}"
+
+java {
+	toolchain.languageVersion = JavaLanguageVersion.of(21)
+	withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach {
+	options.release = 21
+	options.encoding = 'UTF-8'
+}
+neoForge {
+	version = neoForgeVersion
+	mods {
+		noloadingscreen { sourceSet sourceSets.main }
+	}
+}
+def sharedJava = fileTree('../../src/main/java') {
+	exclude '**/platform/FabricBootstrap.java', '**/platform/LoaderServices.java', '**/platform/ClientUi.java'
+	exclude '**/platform/ClientRuntime.java', '**/platform/SceneFactory.java', '**/platform/EnvironmentWarmup.java'
+	exclude '**/platform/SceneRenderer.java', '**/platform/PlayerEnvironment.java', '**/platform/WaitFrame.java'
+	exclude '**/platform/LevelAccess.java', '**/platform/InventoryAccess.java', '**/platform/RegistryLoader.java'
+	exclude '**/gui/LoadingCanvas.java', '**/gui/InventoryScreenAdapter.java'
+	exclude '**/mixin/EntityAccessor.java', '**/mixin/ParticleEngineMixin.java'
+	exclude '**/PlayAddonGuard.java'
+	exclude '**/mixin/MinecraftMixin.java', '**/mixin/GuiMixin.java', '**/mixin/HudMixin.java'
+	exclude '**/mixin/LevelRendererMixin.java', '**/mixin/LevelExtractorMixin.java', '**/mixin/LevelRendererAccessor.java'
+	exclude '**/mixin/LevelLoadTrackerMixin.java', '**/mixin/GameRendererMixin.java', '**/mixin/LivingEntityAccessor.java'
+	exclude '**/mixin/ClientHandshakePacketListenerImplMixin.java', '**/mixin/SodiumWorldRendererMixin.java'
+	exclude '**/compat/ModMenuIntegration.java', '**/compat/SodiumCompatibility.java', '**/compat/SodiumShaderWarmup.java'
+}
+sourceSets.main.java.setSrcDirs(['../neoforge-common/src/main/java', 'src/main/java'])
+tasks.named('compileJava', JavaCompile) { source sharedJava }
+tasks.named('sourcesJar', Jar) { from sharedJava }
+sourceSets.main.resources.srcDirs '../../src/main/resources', '../neoforge-common/src/main/resources'
+sourceSets.test.java.srcDir '../neoforge-common/src/test/java'
+def sharedTests = fileTree('../../src/test/java') {
+	include '**/PlaceholderMovementTest.java', '**/verification/LoadingWorkVerification.java'
+	include '**/verification/SkinPreloadVerification.java', '**/verification/JoinClassWarmupVerification.java'
+	include '**/verification/SodiumQueueVerification.java'
+}
+tasks.named('compileTestJava', JavaCompile) { source sharedTests }
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
+processResources {
+	def metadata = [version: project.version, minecraftVersion: minecraftVersion, neoForgeVersion: neoForgeVersion,
+		nextNeoForgeFamily: upperNeoForgeVersion]
+	inputs.properties metadata
+	filesMatching('META-INF/neoforge.mods.toml') { expand metadata }
+}
+dependencies {
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test {
+	useJUnitPlatform()
+	systemProperty 'java.awt.headless', 'true'
+}
+sourceSets {
+	smoke {
+		java.srcDir '../neoforge-common/src/smoke/java'
+		resources.srcDir '../neoforge-common/src/smoke/resources'
+		compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+	}
+	launcher {
+		java.srcDir '../neoforge-common/src/launcher/java'
+		compileClasspath += sourceSets.main.compileClasspath
+		runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.test.runtimeClasspath
+	}
+}
+def registerClientVerification = { String name, String directory, def extra = files() ->
+	tasks.register(name, JavaExec) {
+		group = 'verification'
+		description = 'Native FML CLIENT transformation and local behavior checks, without a game window.'
+		dependsOn testClasses, launcherClasses
+		javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+		classpath = sourceSets.launcher.runtimeClasspath + extra
+		mainClass = 'io.github.bingkkni.noloadingscreen.launch.ClientVerificationLauncher'
+		// Same module access required by FML10's native/JUnit launch profiles.
+		jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED', '--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming'
+		jvmArgs '-Dfile.encoding=UTF-8'
+		systemProperty 'java.awt.headless', 'true'
+		workingDir layout.buildDirectory.dir(directory)
+		doFirst {
+			workingDir.mkdirs()
+			environment 'MOD_CLASSES', (sourceSets.main.output.files + sourceSets.test.output.files + extra.files)
+				.findAll { it.exists() }.collect { 'noloadingscreen%%' + it.absolutePath }.join(File.pathSeparator)
+		}
+	}
+}
+registerClientVerification('verifyClient', 'client-verification')
+registerClientVerification('verifyCompatibility', 'compatibility-verification')
+registerClientVerification('verifyRegistries', 'vanilla-registry-verification')
+tasks.named('verifyRegistries', JavaExec) { systemProperty 'nls.verify.vanillaRegistryFixture', 'true' }
+tasks.named('verifyCompatibility', JavaExec) {
+	description = 'Verify client hooks and actual Sodium collectors with supplied optional mod jars.'
+	systemProperty 'nls.verify.compatibility', 'true'
+	doFirst {
+		def supplied = providers.gradleProperty('compatibilityJars').orNull
+		if (supplied == null || supplied.isBlank()) throw new GradleException('Supply -PcompatibilityJars=/path/to/mod.jar,...')
+		def jars = supplied.split('[,;]', -1).collectMany { token ->
+			def path = file(token.trim())
+			if (token.isBlank() || !path.exists()) throw new GradleException("Missing compatibility jar/path: ${token}")
+			path.isDirectory() ? fileTree(path) { include '*.jar' }.files.toList() : [path]
+		}.unique()
+		if (jars.isEmpty() || jars.any { !it.isFile() || !it.name.endsWith('.jar') }) throw new GradleException('Compatibility inputs must resolve to existing jar files')
+		jars.each { jar ->
+			def digest = java.security.MessageDigest.getInstance('SHA-1')
+			jar.withInputStream { stream ->
+				byte[] bytes = new byte[65536]
+				int count
+				while ((count = stream.read(bytes)) != -1) digest.update(bytes, 0, count)
+			}
+			logger.lifecycle("Compatibility input: ${jar.name} SHA1=${digest.digest().encodeHex()}")
+		}
+		project.sync { from jars; into new File(workingDir, 'mods'); duplicatesStrategy = DuplicatesStrategy.FAIL }
+	}
+}
+
+registerClientVerification('verifyGpu', 'gpu-smoke', sourceSets.smoke.output)
+tasks.named('verifyGpu', JavaExec) {
+	description = 'Opt-in isolated full client/GL smoke; never opens a save or server.'
+	dependsOn smokeClasses, downloadAssets
+	systemProperty 'nls.verify.gpu', 'true'
+	systemProperty 'nls.verify.handoffCase', providers.gradleProperty('handoffCase').getOrElse('all')
+	systemProperty 'java.awt.headless', 'false'
+	maxHeapSize = '2G'
+	timeout = java.time.Duration.ofMinutes(3)
+	doFirst {
+		def assets = new Properties()
+		tasks.named('downloadAssets').get().assetPropertiesFile.get().asFile.withInputStream { assets.load(it) }
+		args '--version', minecraftVersion, '--gameDir', workingDir.absolutePath,
+			'--assetsDir', assets.getProperty('assets_root'), '--assetIndex', assets.getProperty('asset_index'),
+			'--accessToken', '0', '--username', 'NlsIsolatedSmoke', '--width', '854', '--height', '480'
+		def supplied = providers.gradleProperty('smokeModJars').orNull
+		def mods = supplied == null ? [] : supplied.split('[,;]', -1).collect { token ->
+			def candidate = file(token.trim())
+			if (token.isBlank() || !candidate.isFile()) throw new GradleException("Missing smoke jar: ${token}")
+			candidate
+		}
+		project.sync { from mods; into new File(workingDir, 'mods'); duplicatesStrategy = DuplicatesStrategy.FAIL }
+		def configDir = new File(workingDir, 'config')
+		configDir.mkdirs()
+		// Sodium's GL backend cannot consume NeoForge's DEV-only validation wrappers.
+		// Match the normal production default for modded smoke; bare smoke retains validation.
+		new File(configDir, 'neoforge-client.toml').text = 'enableB3DValidationLayer=' + mods.isEmpty() + '\n'
+		// Isolated deterministic display settings only, never the user's Minecraft options.
+		new File(workingDir, 'options.txt').text = 'pauseOnLostFocus:false\nmaxFps:120\nonboardAccessibility:false\n'
+	}
+	doLast {
+		def log = new File(workingDir, 'logs/latest.log')
+		if (!log.isFile() || !log.getText('UTF-8').contains('NeoForgeGpuSmoke PASSED')) throw new GradleException('Client exited without completing GPU smoke assertions')
+	}
+}
+jar {
+	from('../../LICENSE') { rename { 'LICENSE_noloadingscreen' } }
+}
+tasks.register('verifyArtifact') {
+	group = 'verification'
+	dependsOn jar
+	doLast {
+		def artifact = tasks.named('jar').get().archiveFile.get().asFile
+		new java.util.zip.ZipFile(artifact).withCloseable { zip ->
+			def forbidden = zip.entries().findAll { entry ->
+				entry.name == 'fabric.mod.json' || entry.name == 'noloadingscreen.mixins.json' ||
+				entry.name.contains('/smoke/') || entry.name.contains('.smoke.') || entry.name.contains('/verification/') || entry.name.contains('/launch/') ||
+				entry.name.endsWith('/ClientVerification.class') ||
+				entry.name.endsWith('Test.class') || entry.name.contains('FabricBootstrap') || entry.name.contains('ModMenuIntegration')
+			}
+			if (!forbidden.isEmpty()) throw new GradleException("Verification/Fabric files leaked into ${artifact.name}: ${forbidden}")
+			if (zip.getEntry('META-INF/neoforge.mods.toml') == null || zip.getEntry('noloadingscreen.neoforge.mixins.json') == null)
+				throw new GradleException('NeoForge metadata or required Mixin configuration missing')
+			zip.getInputStream(zip.getEntry('io/github/bingkkni/noloadingscreen/NoLoadingScreen.class')).withCloseable { stream ->
+				def data = new DataInputStream(stream)
+				data.readInt(); data.readUnsignedShort()
+				if (data.readUnsignedShort() != 65) throw new GradleException('NeoForge artifact must target Java21')
+			}
+		}
+		logger.lifecycle("Verified client artifact: ${artifact.name}")
+	}
+}
+check.dependsOn verifyClient, verifyRegistries, verifyArtifact
+sourceSets.main.resources.exclude 'fabric.mod.json', 'noloadingscreen.mixins.json'
+repositories { mavenCentral() }
+dependencies { compileOnly 'org.jspecify:jspecify:1.0.0' }

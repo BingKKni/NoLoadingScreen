@@ -1,0 +1,7 @@
+plugins {
+	id 'net.neoforged.moddev' version '2.0.147'
+}
+ext.minecraftVersion = '1.21.11'
+ext.neoForgeVersion = '21.11.45'
+ext.upperNeoForgeVersion = '21.12'
+apply from: '../neoforge-common.gradle'

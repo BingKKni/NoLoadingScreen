@@ -9,6 +9,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LocalPlayer.class)
 public abstract class LocalPlayerMixin {
+	@Inject(method = "aiStep", at = @At("HEAD"))
+	private void nls$prepareHold(final CallbackInfo ci) {
+		NoLoadingScreen.beforePlayerAiStep((LocalPlayer) (Object) this);
+	}
+
 	/**
 	 * Runs after {@code travel()} has already applied gravity, so this is the last chance to undo a
 	 * fall through terrain that has not arrived yet.

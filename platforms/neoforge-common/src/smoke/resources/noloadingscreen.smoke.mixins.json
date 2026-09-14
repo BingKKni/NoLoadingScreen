@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "io.github.bingkkni.noloadingscreen.smoke.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["SmokeFrameMixin", "SmokeRenderMixin", "DisconnectRegistryProbeMixin", "DisconnectMeshProbeMixin"],
+  "injectors": {"defaultRequire": 1}
+}

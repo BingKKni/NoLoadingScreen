@@ -1,5 +1,6 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.gui.LoadingHud;
 import net.minecraft.client.DeltaTracker;
@@ -13,8 +14,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Once the loading screen is gone the HUD is the only surface left, so the progress bar, the chunk
- * map and the status line continue there.
+ * Once the loading screen is gone the progress bar and status text continue on the HUD.
+ * The central chunk-status rectangle is intentionally omitted.
  */
 @Mixin(Hud.class)
 public abstract class HudMixin {
@@ -35,7 +36,7 @@ public abstract class HudMixin {
 	private void nls$drawLoadingOverlay(
 		final GuiGraphicsExtractor graphics, final DeltaTracker deltaTracker, final CallbackInfo ci
 	) {
-		if (Minecraft.getInstance().gui.screen() instanceof LevelLoadingScreen) {
+		if (ClientUi.screen(Minecraft.getInstance()) instanceof LevelLoadingScreen) {
 			// Still mounted, so it is drawing the same thing already.
 			return;
 		}
@@ -45,6 +46,6 @@ public abstract class HudMixin {
 		}
 
 		graphics.nextStratum();
-		LoadingHud.draw(graphics, NoLoadingScreen.overlayTracker());
+		LoadingHud.draw(new io.github.bingkkni.noloadingscreen.gui.LoadingCanvas(graphics), NoLoadingScreen.overlayTracker());
 	}
 }

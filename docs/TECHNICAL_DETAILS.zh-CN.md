@@ -1,5 +1,7 @@
 # NoLoadingScreen：实现原理与实测
 
+> 下文 API 名称与历史测量针对 Fabric26.2。NeoForge1.21.10/.11 的编译期适配、精确依赖和独立验证范围见 [NEOFORGE.md](NEOFORGE.md)；功能状态机仍共享。
+
 [English technical document](TECHNICAL_DETAILS.md) | [返回简体中文 README](../README_zh-CN.md) | [English README](../README.md)
 
 > 本文面向希望了解内部实现、兼容性设计和测试过程的开发者。安装与日常使用请直接阅读项目 README。
@@ -23,7 +25,7 @@
 3. **写清楚现在在等什么。** 原版跨服时那块板子上一个字都没有。本模组在屏幕上写明当前阶段
    （启动世界 / 同步数据 / 等待世界 / 接收区块）和已等待秒数，日志里每次进图也留一行分段汇总。
 
-纯客户端 Fabric 模组，**不构造、不拦截、不延迟、不重排任何一个发往服务端的数据包**。
+纯客户端 Fabric 模组，**不构造、丢弃或重排协议数据包**。加载期间会将接收包处理分摊到后续帧，处理及原版回复的时机因此可能改变；这不是后台线程直接修改真实世界。
 
 > ⚠️ **先说清楚这个模组不做什么：它不会让进图变快。**
 > 服务端要花的时间，客户端模组一秒也省不掉——Hypixel 跨服的「重载配置中」是服务端在重发注册表和标签，
@@ -98,9 +100,9 @@ if (flag1) { ... this.renderLevel(deltaTracker); ... }
 
 看到的是**刚刚离开的那个地方，静止着**，可以自由转视角。**全程没有 new 出任何对象。**
 
-#### 单人开图：合成一个虚空
+#### 首次加载：合成一个虚空
 
-单人开图时没有任何东西可以接管，所以这里才构造：一个完整的、普通的 `ClientLevel`
+单人开图及首次多人连接没有旧世界可接管，因此构造一个完整的、普通的 `ClientLevel`
 （空区块、平原群系、正午、晴天）和一个站在里面的 `LocalPlayer`。
 
 ⚠️ **构造 `ClientPacketListener` 是有代价的，这一点是实机跑出来才发现的**：它的构造函数被别的模组挂了钩子。
@@ -113,11 +115,23 @@ java.lang.IllegalStateException
     at ClientPacketListener.<init>
 ```
 
-**所以只有单人开图这一条路径会构造**，而它恰好是安全的：那时根本不存在 play 会话，也正因如此才没有东西可接管。
+**只在真正的 play 监听器尚未创建的首次加载阶段构造**；切服继续接管旧世界。
 即便如此，构造前后仍会把那个全局槽位保存并还原（见 `PlayAddonGuard`）——否则这个马上要被丢弃的监听器
 会一直占着槽位，等真正的监听器建立时同样抛异常，而那已经在进图中途、救不回来了。
 如果那个槽位因为 Fabric 内部改动而无法安全存取，本模组**宁可不构造**，保留加载界面；
 其中「加载地形中」界面仍会按极简样式绘制。
+
+#### 占位移动与冻结渲染
+
+占位视图使用独立的每秒 20 tick 移动模型，继承速度、疾跑状态、移动与飞行速度属性，以及旧玩家的能力飞行开关。新建的合成玩家仍从步行开始，不继承上一次占位世界的飞行状态。临时切服界面不再清空持续按键；空中使用空中加速度与阻力，跳跃使用原版跳跃强度、重力和疾跑跳跃冲量，长按空格落地后继续跳。双击 W 或疾跑键可以疾跑，双击空格切换飞行；切服前已按住的空格不会被误认为一次新的双击。
+
+非飞行时仅调用原版碰撞查询、台阶计算与潜行边缘退让，不调用带游戏副作用的 `Entity.move`。飞行时才绕过碰撞。单人合成虚空没有地形，因此在初始高度提供本地虚拟落脚面，不向世界放置方块。不执行玩家的游戏 tick；这不是水流、梯子、载具等全部原版物理的复刻。打开 E/聊天只屏蔽输入，不再清零速度或暂停重力；关闭移动配置才停用移动模拟。
+
+受控位置在移动 tick 之间仅插值一次。拆分后的渲染时钟对世界环境返回 `1`，对相机眼高/FOV、手臂及本地玩家动画保留实时 partial tick；`EntityRenderDispatcher` 将其他实体固定为 `1`，避免反复重播其最后一次移动。此前把相机插值也固定为 `1` 是缺陷，会让这些缓动变成每秒 20 次阶梯跳变，即使 FPS 正常。渲染帧率不会推进移动模拟。
+
+天空沿用旧世界的群系、时间和环境属性。26.2 拆除世界会清空 `Camera.attributeProbe`，而占位阶段原版不调用 `GameRenderer.tick`；仅恢复相机实体仍会取到默认黑色天空和默认太阳角度。现在在相机对齐后、天空和雾提取前刷新环境采样，单人合成世界则在构造 `ClientLevel` 前设置正午时钟，避免缓存旧亮度。
+
+仅更新本地视觉状态：潜行/游泳姿势及缓动、手臂旋转、相机眼高/FOV、步行动画/视角摇晃/披风状态、头身朝向、动画年龄及已开始的挥手进度。飞行会退出游泳/潜行姿势，不添加自定义手部变换。不调用实体 tick 或游戏 AI。
 
 #### 为什么这对服务端是安全的
 
@@ -131,13 +145,14 @@ java.lang.IllegalStateException
 - 真世界一到，占位整个被丢掉，原版在原版时机用**服务端给的坐标和视角**新建真玩家。
   在虚空里转过的视角、飘过的距离一点都带不进去，所以服务端没有任何东西需要纠正，
   也不存在「客户端偷跑几格被拉回」这种情况。
-- **绑定只发生在一帧渲染期间。** `minecraft.level` / `player` / `gameMode` 只在 `renderFrame` 和鼠标转视角
-  这两个调用的前后被填上、随即置回 null。所以**客户端每个 tick、每个数据包处理、每个别的模组看到的仍然是
-  原版的 null**——这是把影响面压到最小的关键。
+- **绑定限于局部调用，并在 finally 中还原。** 渲染、鼠标转视角、初始化、整个局部移动/视觉更新及必要的界面初始化/点击临时使用占位字段；不绑定整个 `Minecraft.tick`，也不绑定连接驱动。正常游戏 tick、数据包处理与生命周期事件仍看到原版的空世界。
+
+初始化姿势也必须处于上述绑定内：`updateSwimming` 会经 `AbstractClientPlayer.getPlayerInfo` 访问 `Minecraft.getConnection`。此前在绑定前初始化就是本次单人日志中空指针异常的原因。
 
 唯一一处必须额外处理的是 `Minecraft#handleKeybinds`：原版只在没有界面时才会走到它，而「没有界面」在原版里
-蕴含「有玩家」，它每个分支都解引用 `this.player`、一半分支还要发包。所以占位期间它被整个跳过
-（期间攒下的点击也一并丢弃，免得世界一开就集中触发）。
+蕴含「有玩家」，不少分支解引用 `this.player` 或发包。占位阶段保留 F5、聊天、指令框、E、数字键/滚轮、F 及本地左右键操作；剩余游戏点击丢弃。加载期间禁止补全请求，并在聊天提交和 `ClientPacketListener.sendChat/sendCommand` 两层拦截，分别显示红色「当前状态无法发言!」「当前状态无法执行指令!」。E 打开 `LoadingInventoryScreen`：继承 AbstractContainerScreen，使用一次性玩家的物品栏和原版人物预览，不额外显示警告文字。`slotClicked` 绕过 MultiPlayerGameMode，仅调用本地菜单逻辑；禁用合成、丢弃及网络驱动的鼠标扩展。其输入回调和 final tick 单独绑定占位字段，`onClose/removed` 不调用会发包的原版关闭/丢弃流程。配置连接继续独立 tick。
+
+`PlaceholderInteraction` 通过新的射线查询操作旧 ClientLevel：左键用客户端 setBlock 立即移除方块，不调用挖掘控制器、不掉落；右键仅调用 BlockItem.place（不调用 useOn/use），保留原版放置校验，成功后确保消耗一件。快捷栏和副手交换仅修改旧玩家物品栈。每 tick 单独更新 ItemInHandRenderer 与换手计时，挥手调用不发客户端包的双参数重载。所有方块/物品改动在占位卸载时丢弃，同时清除攻击/使用按住状态，避免在新服继续执行。
 
 #### 它不允许把游戏搞崩
 
@@ -186,11 +201,10 @@ public void renderFrame(boolean advanceGameTime) {
 于是原版状态机照常推进——加载界面关闭和 `ServerboundPlayerLoadedPacket` 依然由原版代码在同一 tick、
 按原版顺序发出。
 
-这就是为什么它对反作弊是安全的：**没有任何一个发往服务端的包是模组发的。** 那个「ready 包」
-（`ServerboundPlayerLoadedPacket`，1.21.4 引入）本来就是原版机制的一部分，本模组只是让它提前触发。
+本模组不伪造「ready 包」：`ServerboundPlayerLoadedPacket`（1.21.4 引入）仍由原版机制提前触发。但客户端就绪时机发生了变化，不能由此推导所有反作弊政策都会接受，仍须在有权限的测试服验证。
 
 闸门固定为立即放行，不等服务端开始发区块。若此时玩家所在区块还没到达，本模组会固定锁定玩家位置，
-直到该区块到达，避免客户端物理让玩家坠入虚空。
+直到该区块到达，避免客户端物理让玩家坠入虚空。锁定属于当前玩家，`handleMovePlayer` 完成原版绝对/相对坐标解析与传送确认后更新锚点，不回写旧出生点、不锁定 yaw/pitch。等待时不伪造 `onGround=true`，防止触发原版的落地取消飞行；重建世界、断开或禁用 Mod 时清除锁定。
 
 ### 三、单人不再空转
 
@@ -228,40 +242,93 @@ if (this.connection.isConnected()) {
 }
 ```
 
-`Minecraft` 自己只 tick *pending* 连接，所以界面一没，连接就不再推进，会一直卡到超时。
-本模组的做法是**界面对象留着并继续被 tick，只是不再挂在 Gui 上**：模组每个客户端 tick 直接调它的
-`tick()`，原版逻辑一行没改，连那个 600 tick 的「断开连接」按钮延时都照跑。
+`Minecraft` 自己只 tick *pending* 连接；原版界面撤下后，配置阶段连接必须由模组继续驱动。
+模组保留原界面，在每个客户端 tick 直接调用原版 `ServerReconfigScreen.tick()`，直到登录成功或断开连接，不再复制连接更新分支。打开其他界面不会丢失连接的驱动权；原重载配置界面挂载时则交给原版 tick，避免重复更新。
 
-**按 Esc 可以随时把这个界面装回来**，因为上面的「断开连接」按钮是配置阶段唯一的退路（Esc 在原版那里无效），
-一个出不去的虚空是个陷阱。虚空画面下方会一直写着这行提示。
+**按 Esc 会打开带有「回到游戏」和立即可用的「断开连接」按钮的加载菜单**，不再等待原版的 600 tick 延时。断线仍交由原连接监听器处理。意外断线进入 KickWarn：保留本地场景且没有停留超时，聊天栏立即打印服务器原始被踢消息或原版超时原因（保留颜色与换行）。主动断开、成功的协议转服和单人错误不进入 KickWarn；主动返回标题界面或服务器列表时清除占位世界及渲染引擎引用。
+
+### 五、单人保存退出画面
+
+`SavingWorldView` 在原版拆除前捕获场景，在旧监听器断开后接管。`LoadingWaitLoop` 轮询输入，用独立 20 Hz 时钟推进已有占位移动、动画及物品栏操作，并逐帧处理鼠标。保存期间不调用 Minecraft/玩家/连接 tick，也不处理通用任务队列。仅在绑定的占位保存玩家内放行 null-screen 检查，全局 teardown 标记仍保留；保存文字改由 HUD 绘制。
+
+保存循环仍等待原版 `server.isShutdown()`，不缩短或跳过保存。最后的界面/引擎拆除前释放场景和时钟，finally 再幂等清理；占位失败恢复原版保存界面。本地操作不写入存档。
+
+**这不是逐块卸载动画。** 其他实体及环境保持冻结，不虚构保存百分比或区块消失顺序。
+
+`MouseHandler` 和 `KeyboardHandler` 的输入派发使用可串联的 `@WrapOperation`。此前相互竞争的 `@Redirect` 会导致 ViaFabricPlus 4.6.1 的 `storeEvent` 启动注入失败。仅局部等待主动轮询的客户端线程输入立即执行，其余输入交还原操作链，保留其他 Mod 的调度行为。可选 `verifyInputCompatibility` 任务使用提供的未修改 ViaFabricPlus JAR 验证转换；这不是完整游戏或服务器兼容性测试。
+
+### 六、资源准备与首次多人连接提前占位
+
+单人在 `WorldOpenFlows.openWorldLoadLevelStem` 的「准备资源」界面后进入占位，局部包装 managedBlock 完成谓词插入输入/渲染帧，完成任务处理与失败/确认界面仍归原版所有。多人在后台加密状态回调中只发布标记，下一次客户端 tick 安装；离线服在加入阶段触发。隐藏的 ConnectScreen 仍驱动连接，挂载时不重复 tick，成功登录不关闭连接，取消沿用 aborted/channelFuture 同步语义。
+
+`PlaceholderRegistries` 在启动时异步解码原版客户端注册表，同时独立复制静态 holder 与标签，不向全局注册表或服务器监听器应用本地标签。预热未完成/失败则保留原版界面。详见[实现与边界](LOADING_IMPROVEMENTS.zh-CN.md)和[实机测试清单](TESTING.zh-CN.md)。
+
+1.0.4 在资源准备到 `doWorldLoad` 之间保留同一占位世界：只跳过重复的空会话清理，保留原版新 tracker，不重建玩家或重置镜头。占位本地玩家仅跳过 `LevelExtractor` 的区块网格可见性检查，继续使用原版人物渲染；加载 HUD 不再画中央区块状态矩形。
+
+保存、配置和 KickWarn 使用共享的 `OutgoingWorld` 快照。KickWarn 仍执行原版实际断线清理，仅保留场景和网格；原版断线详情页作为安全回退及退出目的地来源。左键消费原版按下事件，不再在长按转头时不断破坏方块。
+
+1.0.5 在被踢后的占位绑定内把冒险/旁观控制器改为生存，玩家模式查询复用该控制器而不修改共享 PlayerInfo。中键通过原版克隆、方块实体序列化/组件收集与 Inventory 选取方法工作，保留头颅皮肤等客户端可用数据；不调用服务器选取/查询包。详见[本轮增量说明](LOADING_IMPROVEMENTS.zh-CN.md)。
+
+### 七、皮肤交接与加载工作调度（1.0.5 增量）
+
+真实本地玩家在 PlayerInfo 未到达或服务器皮肤 Future 未完成时，暂用已完成的账户皮肤；查询先走原版，以保证下载启动。服务器完成的自定义/默认皮肤与空结果都优先，其他玩家不受影响。
+
+加载期间客户端收包队列采用 8 ms 软预算，普通帧任务队列采用 4 ms 软预算，只在完整包/任务边界让出，FIFO、异常与主线程归属保留。原版同步区块构建交给 `compileAsync`，Sodium 可选钩子避免 `awaitCompletion` 的主线程等待/抢任务；显式完整帧模式保留等待。提前就绪后延续 5 秒，随后恢复普通玩法策略。合成虚空的有效渲染距离最多 2，不改用户保存的选项。
+
+预算不抢占单个操作，渲染器拆除、GPU 上传/着色器编译、注册表应用及其他 Mod 的回调仍可能卡帧。`[loading-work]` 限量记录超过 100 ms 的慢调用。实际客户端日志确认 ViaFabricPlus 4.6.2 的 RETURN 收尾仍需要活 channel，故接管改到整个处理器返回之后；Fabric play addon 被占用时直接拒绝合成。
+
+证据、实现边界及冷/热启动对照方法见[本轮说明](LOADING_IMPROVEMENTS.zh-CN.md)和[测试说明](TESTING.zh-CN.md)。已做无窗口回归及实际 Sodium/Fabric API/ViaFabricPlus JAR 转换检查，未完成本次整合包 FPS 和实服验收。
+
+### 八、首次进图冷启动（1.0.5 追加）
+
+复测日志显示单个登录处理仍可耗时 367 ms、收包调用 782 ms。独立 RX 580/OpenGL 测试的 JFR 在首次占位安装期间采到 JAR 读取、类加载和 Mixin 转换，因此增加启动收尾的类型签名预热：不执行初始化器或构造器，不在后台并发驱动类转换。已验证 Sodium 的三种实际地形管线也在进图前预编译，GPU 调用仍归渲染线程。
+
+合成虚空仅创建一个工作线程；未使用、相同视距、未跨资源重载的 Sodium 渲染器合并第一次重复 reload。资源代次变化、使用/编辑/卸载会使这一优化失效，正常玩法重载保留。Fabric 配置 addon 被占用时也拒绝合成，避免其原版 setter 抛错。慢日志增加包类及 Sodium 初始化/销毁，并覆盖资源等待直接绘制的帧。
+
+新增无窗口回归和可选 `verifyColdStartGpu` 均通过；真实图形测试只显示占位场景，不开存档、不连接服务器。类型预热后独立运行的首次占位安装约 195 至 197 ms，仍不是完全不卡顿；启动准备会增加耗时，整合包/真实地形还须复测。完整证据及命令见[追加说明](LOADING_IMPROVEMENTS.zh-CN.md)和[测试说明](TESTING.zh-CN.md)。
 
 ### Mixin 清单
 
-九个 Mixin（其中三个是纯访问器），全部是 `@Inject` / `@Redirect` / `@ModifyVariable` / `@WrapMethod`，
+主要 Mixin 和访问器使用 `@Inject` / `@Redirect` / `@ModifyVariable` / `@WrapMethod` / `@WrapOperation`，
 **没有 `@Overwrite`**：
 
 | 类 | 注入点 | 作用 |
 |---|---|---|
+| `PacketProcessor` | `processQueuedPackets` / 队列检查 | 仅客户端加载期间在完整包之间按预算让出，不出队重排 |
+| `Minecraft` | `runTick` 任务范围 / `shouldRun` | 仅普通帧任务按预算让出，同步完成等待不受限 |
+| `LevelRenderer` | `compileSections` → `compileSync` | 加载期间使用原版异步构建器 |
+| `Options` | `getEffectiveRenderDistance` | 仅合成虚空限制有效距离，不写配置 |
+| Sodium `RenderSectionManager`（可选） | `updateChunks` → `awaitCompletion` | 加载期间不等待/抢占后台建模，保留完整帧模式 |
 | `Minecraft` | `renderFrame` `@WrapMethod` | 渲染一帧期间绑定/解绑占位世界 + 异常安全网 + 交还交换链图像 |
 | `Minecraft` | `runTick` → `handleAccumulatedMovement` | 绑定后调用，让鼠标能转占位玩家的视角 |
 | `Minecraft` | `handleKeybinds` HEAD | 占位期间整个跳过（见上） |
 | `Minecraft` | `doWorldLoad` → `IntegratedServer.isReady` | 去掉启动空转 |
-| `Minecraft` | `doWorldLoad` RETURN | 单人：装上占位世界 |
+| `Minecraft` | `doWorldLoad` → `disconnectWithProgressScreen` / `Gui.setScreen` | 保留提前占位场景和镜头；捕获原版 tracker 后隐藏加载界面 |
 | `Minecraft` | `setScreenAndShow` → `renderFrame` | 界面被丢弃时跳过那一帧强制渲染，消掉闪黑 |
-| `Minecraft` | `tick` HEAD | 驱动被撤下的「重载配置中」界面 + 占位世界的 tick |
+| `Minecraft` | `tick` HEAD / `pauseGame` HEAD | 驱动配置阶段连接与占位移动 / 打开加载菜单 |
 | `Minecraft` | `clearClientLevel` → `updateLevelInEngines` | 跨服时不释放区块网格，旧世界留在屏幕上 |
 | `Minecraft` | `clearClientLevel` / `setLevel` / `disconnect` | 交还渲染引擎 + 诊断分段 |
 | `ClientPacketListener` | `handleConfigurationStart` ×2 | 跨服：快照旧世界 → 装上占位世界 |
-| `ClientPacketListener` | `handleLogin` HEAD | 真世界到达，撤下占位世界 |
+| `ClientPacketListener` | `handleLogin` 线程检查之后 | 真世界到达，撤下占位世界 |
 | `ClientPacketListener` | `<init>` RETURN | 检查点：配置阶段结束 |
 | `ClientPacketListener` | `startWaitingForNewLevel` RETURN | 撤下单人沿用中的加载界面 |
 | `LevelLoadTracker` | `startClientLoad` / `loadingPacketsReceived` / `tickClientLoad` / `isLevelReady` | 闸门逻辑 |
 | `Gui` | `setScreen` HEAD / `extractRenderState` | 丢弃加载界面 / 极简加载界面 |
+| `GameRenderer` | `update` / `extract` / `render` | 分离实时本地视觉与冻结的环境时间 |
+| `EntityRenderDispatcher` | `extractEntity` | 本地玩家使用实时动画插值，其他实体冻结 |
+| `MouseHandler` | `onScroll` | 局部绑定，使原版小数滚轮/快捷栏选择可用 |
+| `Gui` | `tick` → `Hud.tick` | 只为原版 HUD tick 绑定占位玩家，使快捷栏物品名检测与倒计时正常推进 |
+| `Gui` | `tick` → `Screen.tick` | 只为本地物品栏的 final tick 绑定玩家 |
 | `Hud` | `extractRenderState` TAIL | 加载信息浮层 |
-| `LocalPlayer` | `aiStep` TAIL | 区块未到达时锁定位置，区块到达后恢复正常物理 |
+| `LocalPlayer` | `aiStep` HEAD / TAIL | 等待区块时不伪造落地、只锁位置不锁视角，区块到达后恢复正常物理 |
+| `ClientPacketListener` | `handleMovePlayer` RETURN | 原版解析和确认传送后更新位置锁定锚点 |
+| `Minecraft` | `disconnect` 包装 / 保存界面挂载前 / 引擎拆除 | 单人保存或 KickWarn 接管；保留离线镜头/网格，清除真实连接所有权 |
+| `ClientHandshakePacketListenerImpl` | `onDisconnect` → `Gui.setScreen` | 已有占位场景的登录失败进入统一断线清理/KickWarn |
+| `DisconnectedScreen` | `parent` / `details` 访问器 | 复用原版退出目的地、原始文本和错误详情 |
+| `LevelExtractor` | `isEntityVisible` → `isSectionCompiledAndVisible` | 无区块网格时仍显示绑定的占位本地人物 |
 | `ClientCommonPacketListenerImpl` | `connection` 字段（访问器） | 接管旧监听器后把它的连接换成死连接 |
 | `LevelLoadingScreen` | `loadTracker` 字段（访问器） | 取出界面正在显示的 tracker，交给浮层继续画 |
-| `ServerReconfigScreen` | `connection` / `delayTicker` 字段（访问器） | 交还界面时保留已经等过的时间 |
+| `ServerReconfigScreen` | `connection` / `disconnectButton` 字段（访问器） | 持续驱动连接，并在回退界面启用立即断开连接按钮 |
 
 ---
 
@@ -272,7 +339,7 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 | 选项 | 默认 | 说明 |
 |---|---|---|
 | 启用 Mod | 开 | 关闭后一切行为与原版完全一致。 *连日志都不写* |
-| 允许加载时移动 | 开 | 占位世界生效时可以用移动键飘动，空格上升、Shift 下降；纯本地效果，不发包 |
+| 允许加载时移动 | 开 | 占位世界中行走、疾跑与跳跃；双击空格切换飞行/穿墙，飞行时空格上升、Shift 下降；不发包 |
 | 加载信息浮层 | 开 | 界面撤掉后继续在 HUD 上画阶段文字、已等待秒数和进度条 |
 | 显示进图耗时 | 关 | 每次进图后把总耗时和分段明细发到聊天框。**关掉也照样写进 `latest.log`** |
 
@@ -294,9 +361,8 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 ## 兼容性与已知限制
 
 - **纯客户端**，服务端不需要装。
-- **已与 Sodium 0.9.2-alpha.4 共存验证。** 它替换了区块构建器，而闸门依赖的正是「建模完成」这个信号；
-  实测两者不冲突（本模组绕过等待，不参与建模）。占位世界会多触发两次 `LevelExtractor.setLevel`
-  （装上 / 撤下各一次）。
+- **Sodium 私有钩子只对当前最新正式版按精确版本启用。** 已验证 `0.9.2+mc26.2` 的目标布局与行为；未知或预发布版本安全关闭这些私有优化。占位世界装卸仍可能触发渲染器重建和工作线程退出，本轮没有将整套 GPU 资源拆除移到其他线程。
+- **常见 Fabric 优化组合已做实际 JAR 的无窗口目标转换检查。** 同一矩阵包含 Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.3、RRLS 5.2.8、Sodium 0.9.2 和 ViaFabricPlus 5.0.1；额外组合覆盖 Bobby 5.2.15、Distant Horizons 3.2.0-b、FastQuit 3.1.5 与 Reese's Sodium Options 2.2.3。这只能证明这些精确版本加载时 NoLoadingScreen 钩子成功保留，不能替代 GPU 或玩法测试。除 Sodium 的精确私有优化外，生产代码优先通过可串联的原版目标与生命周期兼容，不引入脆弱的第三方私有 API 依赖。
 - ⚠️ **占位世界期间，别的模组在渲染钩子里看到的是那个假世界。** 绑定只发生在一帧渲染之内，
   所以 tick 事件、数据包处理里它们看到的仍是原版的 `null`；但如果某个模组在渲染回调里对
   `mc.level` / `mc.player` 做了很强的假设，理论上可能表现异常。当前不能单独关闭占位世界；
@@ -308,6 +374,8 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
   [issue](https://github.com/BingKKni/NoLoadingScreen/issues)。
 
 ### 验证状态
+
+当前 `./gradlew build` 会执行两项可重复检查：`movementTest`（速度、跑跳惯性、落地/墙壁、双击控制、阻尼与插值断言）以及 `verifyMixins`（无窗口 Fabric 环境中的目标类 Mixin 转换、连接驱动权、原断线原因保留、状态清理、加载菜单按钮、F5 与按键保留、消息拦截、天空探针、手臂缓动、空连接初始化/更新回归、拆分插值时钟、本地动画、菜单内物理、即时破坏/放置规则、按键和小数滚轮路由、本地物品栏生命周期，以及离线占位快捷栏物品名的切换、倒计时、暂停与空格清除）。另有可选 `verifyOptimizationCompatibility` 使用调用者提供的实际 Mod JAR 执行组合转换矩阵。验证程序会在创建游戏窗口前退出，不包含在可分发 JAR 内。这些检查不能替代真实多人服务器切服测试。下方实机数据属于此前测试，并不代表本次更新已经完成实机验证。
 
 - `./gradlew build` 通过。
 - **全部 Mixin 确认实际生效**：通过临时的 `preLaunch` 入口强制加载全部目标类触发 Mixin 变换，
@@ -345,12 +413,12 @@ cd NoLoadingScreen
 ./gradlew build
 ```
 
-产物在 `build/libs/noloadingscreen-1.0.0.jar`。需要 **JDK 25**。
+产物在 `build/libs/noloadingscreen-1.0.5.jar`。需要 **JDK 25**。
 
 发版：推一个 `v` 开头的 tag，CI 会用 tag 里的版本号构建并自动创建 GitHub Release，把 jar 附上去。
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.5 && git push origin v1.0.5
 ```
 
 > Minecraft 26.1 是首个客户端**不再混淆**的正式版，1.21.11 是最后一个混淆正式版（[Mojang 公告](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition)，[Fabric 确认](https://fabricmc.net/2026/03/14/261)）。26.1 的 `version_manifest` 已经没有 `client_mappings`，Yarn 也停在了 1.21.11，

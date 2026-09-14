@@ -1,5 +1,8 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import io.github.bingkkni.noloadingscreen.LoadingWork;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
@@ -7,6 +10,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.protocol.game.ClientboundLoginPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundStartConfigurationPacket;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -39,6 +43,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ClientPacketListener.class)
 public abstract class ClientPacketListenerMixin {
+	@Inject(method = "sendChat", at = @At("HEAD"), cancellable = true)
+	private void nls$blockChatPacket(final String message, final CallbackInfo ci) {
+		if (NoLoadingScreen.blockOutgoingMessage(false)) ci.cancel();
+	}
+
+	@Inject(method = "sendCommand", at = @At("HEAD"), cancellable = true)
+	private void nls$blockCommandPacket(final String command, final CallbackInfo ci) {
+		if (NoLoadingScreen.blockOutgoingMessage(true)) ci.cancel();
+	}
+
 	/**
 	 * The play listener is built the moment the configuration phase ends, so this is the exact point
 	 * where "the server is still sending me registries" becomes "the server is building my player".
@@ -64,16 +78,43 @@ public abstract class ClientPacketListenerMixin {
 		NoLoadingScreen.onConfigurationStarting();
 	}
 
-	@Inject(method = "handleConfigurationStart", at = @At("RETURN"))
-	private void nls$configurationStarted(final ClientboundStartConfigurationPacket packet, final CallbackInfo ci) {
-		NoLoadingScreen.onConfigurationStarted((ClientPacketListener) (Object) this);
+	@WrapMethod(method = "handleConfigurationStart")
+	private void nls$configurationStarted(final ClientboundStartConfigurationPacket packet, final Operation<Void> original) {
+		original.call(packet);
+		// Run AFTER all RETURN injections. ViaFabricPlus still needs the live channel in its
+		// enableAutoRead tail; adoption replaces the outgoing listener's connection with a dead one.
+		NoLoadingScreen.onConfigurationStarted();
 	}
 
-	@Inject(method = "handleLogin", at = @At("HEAD"))
+	@WrapMethod(method = "handleLogin")
+	private void nls$measureLogin(final ClientboundLoginPacket packet, final Operation<Void> original) {
+		long timing = net.minecraft.client.Minecraft.getInstance().isSameThread() ? LoadingWork.startTiming() : 0L;
+		try {
+			original.call(packet);
+		} finally {
+			LoadingWork.endTiming("login world assembly", timing);
+		}
+	}
+
+	@Inject(
+		method = "handleLogin",
+		at = @At(
+			value = "INVOKE",
+			target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V",
+			shift = At.Shift.AFTER
+		)
+	)
 	private void nls$loginStarting(final ClientboundLoginPacket packet, final CallbackInfo ci) {
 		// The real world is about to be installed. Vanilla checks `minecraft.player == null` to
 		// decide whether to build a player, so the placeholder has to be gone before it looks.
 		NoLoadingScreen.onLoginStart();
+	}
+
+	@Inject(method = "handleMovePlayer", at = @At("RETURN"))
+	private void nls$followServerPosition(final ClientboundPlayerPositionPacket packet, final CallbackInfo ci) {
+		// AFTER vanilla resolves absolute/relative coordinates and acknowledges the teleport.
+		// Holding the pre-teleport position causes repeated corrections (including camera resets).
+		NoLoadingScreen.onPlayerPositionReceived();
 	}
 
 	@Inject(method = "startWaitingForNewLevel", at = @At("RETURN"))

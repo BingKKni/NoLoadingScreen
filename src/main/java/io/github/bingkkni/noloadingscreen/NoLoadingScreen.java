@@ -1,25 +1,35 @@
 package io.github.bingkkni.noloadingscreen;
 
-import com.mojang.blaze3d.platform.InputConstants;
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import io.github.bingkkni.noloadingscreen.platform.LevelAccess;
 import io.github.bingkkni.noloadingscreen.gui.LoadingHud;
+import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
 import io.github.bingkkni.noloadingscreen.mixin.ServerReconfigScreenAccessor;
+import io.github.bingkkni.noloadingscreen.mixin.ConnectScreenAccessor;
+import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.Gui;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-import net.fabricmc.api.ClientModInitializer;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.multiplayer.ServerReconfigScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.LevelLoadTracker;
-import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.util.Util;
+import io.github.bingkkni.noloadingscreen.platform.ClientRuntime;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -34,13 +44,14 @@ import org.slf4j.LoggerFactory;
 	 *       your feet has been <em>meshed</em>. We open its own gate immediately by advancing
 	 *       {@code LevelLoadTracker} and invoking the public callback it already exposes. Screen close
 	 *       and {@code ServerboundPlayerLoadedPacket} are still emitted by vanilla code, in vanilla
-	 *       order — no packet is ever created, delayed or reordered by this mod.</li>
+	 *       order. Loading packet handling is time-sliced without creating, dropping or reordering
+	 *       packets; responses still originate in vanilla handlers.</li>
  *   <li><b>The gap.</b> Everything before the world exists at all — an integrated server booting, a
  *       proxy reconfiguring you onto another server — is time vanilla can only paint a menu over,
  *       because it has no level to render. {@link PlaceholderWorld} gives it one to render.</li>
  * </ol>
  */
-public final class NoLoadingScreen implements ClientModInitializer {
+public final class NoLoadingScreen {
 	public static final String MOD_ID = "noloadingscreen";
 	public static final Logger LOGGER = LoggerFactory.getLogger("NoLoadingScreen");
 
@@ -49,6 +60,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	private static boolean gateReleased;
 
 	private static boolean holdActive;
+	private static @Nullable LocalPlayer heldPlayer;
 	private static Vec3 holdPos = Vec3.ZERO;
 
 	/** Set while we call {@code loadingPacketsReceived} ourselves, so the timeline can tell the
@@ -82,21 +94,20 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	private record PhaseTime(JoinPhase phase, long ms) {
 	}
 
-	// --- The screen we took over --------------------------------------------------------------
-	// The "Reconfiguring" screen owns Connection#tick for the whole configuration phase, and its
-	// Disconnect button is the only way out of a slow one (Esc does nothing there). So it is kept
-	// and kept ticking even while unmounted — vanilla's logic, including the 600-tick button
-	// delay, runs exactly as written. Only the painting is ours.
-	private static @Nullable Screen suppressedConfigScreen;
+	// The configuration connection has no pendingConnection owner. Keep it alive independently
+	// of the visible screen until login or disconnect, including while a menu or pack prompt is up.
+	private static @Nullable ServerReconfigScreen suppressedConfigScreen;
+	/** Initial remote login has a different owner from proxy reconfiguration. */
+	private static @Nullable ConnectScreen suppressedConnectScreen;
+	private static boolean connectPlaceholderAttempted;
+	private static @Nullable Screen resourceScreen;
+	private static boolean resourcePlaceholderAttempted;
 
 	// The world we are about to leave, captured while it still exists and handed to
 	// PlaceholderWorld once vanilla has finished pulling it out of Minecraft's fields.
-	private static @Nullable ClientLevel adoptLevel;
-	private static @Nullable LocalPlayer adoptPlayer;
-	private static @Nullable MultiPlayerGameMode adoptGameMode;
+	private static @Nullable OutgoingWorld outgoing;
 
-	@Override
-	public void onInitializeClient() {
+	public static void initialize() {
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
 		LOGGER.info("NoLoadingScreen ready (enabled={})", config.enabled);
 	}
@@ -108,7 +119,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	}
 
 	public static long phaseElapsedMs() {
-		return phaseStartMs < 0L ? 0L : Util.getMillis() - phaseStartMs;
+		return phaseStartMs < 0L ? 0L : ClientRuntime.millis() - phaseStartMs;
 	}
 
 	private static void enterPhase(final JoinPhase next) {
@@ -118,7 +129,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			return;
 		}
 
-		long now = Util.getMillis();
+		long now = ClientRuntime.millis();
 		if (phase != JoinPhase.NONE && phaseStartMs >= 0L) {
 			phaseLog.add(new PhaseTime(phase, now - phaseStartMs));
 		}
@@ -141,7 +152,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			return -1L;
 		}
 
-		long now = Util.getMillis();
+		long now = ClientRuntime.millis();
 		if (phase != JoinPhase.NONE && phaseStartMs >= 0L) {
 			phaseLog.add(new PhaseTime(phase, now - phaseStartMs));
 		}
@@ -162,30 +173,76 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		return total;
 	}
 
+	// --- Before a WorldStem or remote registry synchronization exists --------------------------
+
+	public static void onPreparingResources() {
+		Minecraft minecraft = Minecraft.getInstance();
+		if (!NoLoadingScreenConfig.get().enabled || minecraft.level != null) return;
+		resourceScreen = ClientUi.screen(minecraft);
+		resourcePlaceholderAttempted = false;
+		enterPhase(JoinPhase.PREPARING_RESOURCES);
+		tryResourcePlaceholder();
+	}
+
+	public static boolean preparingResources() {
+		return resourceScreen != null && NoLoadingScreenConfig.get().enabled;
+	}
+
+	public static void tryResourcePlaceholder() {
+		if (preparingResources() && !resourcePlaceholderAttempted && PlaceholderRegistries.ready() != null) {
+			resourcePlaceholderAttempted = true;
+			installEarlyPlaceholder(true);
+		}
+	}
+
+	private static void installEarlyPlaceholder(final boolean dismissScreen) {
+		RegistryAccess.Frozen registries = PlaceholderRegistries.ready();
+		if (registries != null) PlaceholderWorld.synthesise(registries, null, null, null,
+			new Vec3(0.5, 80, 0.5), 0, 0, dismissScreen);
+	}
+
+	/** Called only from ConnectScreen.tick, never from its off-thread status callback. */
+	public static void onConnecting(final ConnectScreen screen) {
+		Minecraft minecraft = Minecraft.getInstance();
+		ConnectScreenAccessor access = (ConnectScreenAccessor) screen;
+		Connection connection = access.nls$connection();
+		if (!NoLoadingScreenConfig.get().enabled || minecraft.level != null || access.nls$aborted()
+			|| connection == null || !connection.isConnected()
+			|| (ClientUi.screen(minecraft) != screen && suppressedConnectScreen != screen)) return;
+		if (suppressedConnectScreen != screen) {
+			suppressedConnectScreen = screen;
+			connectPlaceholderAttempted = false;
+		}
+		if (phase == JoinPhase.NONE) enterPhase(JoinPhase.CONNECTING);
+		// Never construct a second play listener after configuration has already made the real one.
+		if (!connectPlaceholderAttempted && !(connection.getPacketListener() instanceof ClientPacketListener)
+			&& PlaceholderRegistries.ready() != null) {
+			connectPlaceholderAttempted = true;
+			// A pack prompt can arrive before the first encryption tick. Build behind it, never
+			// dismiss it: only the actual waiting screen (or no screen) can be removed.
+			installEarlyPlaceholder(ClientUi.screen(minecraft) == screen || ClientUi.screen(minecraft) == null);
+		}
+	}
+
 	// --- Singleplayer: the integrated server is booting ----------------------------------------
 
 	/**
-	 * Called at the end of {@code Minecraft#doWorldLoad}, i.e. once the integrated server has been
-	 * spun up and the local connection has been opened. Vanilla would have sat in a hard
-	 * {@code while (!server.isReady())} loop before this point with the whole client frozen —
-	 * {@code MinecraftMixin} removes that wait, so by the time we get here the client is running
-	 * normally again and simply has no world yet.
+	 * Called before doWorldLoad mounts its tracker screen and spins up the server.
+	 * Keep an existing early scene; only a missing scene needs the now-available WorldStem.
 	 */
-	public static void onSingleplayerLoadStart(final RegistryAccess.Frozen registries) {
+	public static void onSingleplayerLoadStart(final RegistryAccess.Frozen registries, final LevelLoadingScreen screen) {
+		if (!NoLoadingScreenConfig.get().enabled) return;
+		resourceScreen = null;
+		resourcePlaceholderAttempted = false;
 		enterPhase(JoinPhase.SERVER_BOOT);
-
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui.screen() instanceof LevelLoadingScreen loadingScreen) {
-			// The tracker Minecraft#doWorldLoad built is held by nothing else; the overlay needs it
-			// to draw the same progress bar and chunk map the screen would have drawn.
-			overlayTracker = LoadingHud.trackerOf(loadingScreen);
-			overlayStartMs = Util.getMillis();
-			levelReadySeen = false;
-			LoadingHud.resetSmoothing();
-		}
-
-		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
-		if (!config.enabled) {
+		// Keep the actual tracker even when GuiMixin never mounts its screen. An early private
+		// world needs no registry swap: it has no gameplay and is discarded at the real login.
+		overlayTracker = LoadingHud.trackerOf(screen);
+		overlayStartMs = ClientRuntime.millis();
+		levelReadySeen = false;
+		LoadingHud.resetSmoothing();
+		if (PlaceholderWorld.active()) {
+			markTimeline("沿用准备资源阶段的占位世界，保留镜头与本地操作");
 			return;
 		}
 
@@ -202,7 +259,6 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * level and player still exist, so it is where the camera state is taken.
 	 */
 	public static void onConfigurationStarting() {
-		Minecraft minecraft = Minecraft.getInstance();
 		beginTimeline("配置阶段开始 (重载配置中...)");
 		enterPhase(JoinPhase.CONFIGURING);
 
@@ -214,13 +270,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		// This world is about to be thrown away, and it is complete: every chunk is loaded and
 		// already meshed. Keeping it is both the best thing to look at and the cheapest, since it
 		// means constructing nothing at all.
-		ClientLevel level = minecraft.level;
-		LocalPlayer player = minecraft.player;
-		if (level != null && player != null && !player.isDeadOrDying()) {
-			adoptLevel = level;
-			adoptPlayer = player;
-			adoptGameMode = minecraft.gameMode;
-		}
+		outgoing = OutgoingWorld.capture();
 	}
 
 	/**
@@ -229,32 +279,25 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * would re-mesh the entire world — the exact cost this mod exists to avoid.
 	 */
 	public static boolean shouldKeepEnginesForAdoption() {
-		return adoptLevel != null;
+		return outgoing != null;
 	}
 
 	/**
 	 * Called at the end of the same method, once vanilla has finished tearing the level down and
 	 * has swapped the connection over to the configuration protocol.
 	 */
-	public static void onConfigurationStarted(final ClientPacketListener listener) {
-		ClientLevel level = adoptLevel;
-		LocalPlayer player = adoptPlayer;
-		MultiPlayerGameMode gameMode = adoptGameMode;
-		adoptLevel = null;
-		adoptPlayer = null;
-		adoptGameMode = null;
-
-		if (level == null || player == null) {
-			return;
-		}
+	public static void onConfigurationStarted() {
+		OutgoingWorld snapshot = outgoing;
+		outgoing = null;
+		if (snapshot == null) return;
 
 		Minecraft minecraft = Minecraft.getInstance();
-		Screen screen = minecraft.gui.screen();
+		Screen screen = ClientUi.screen(minecraft);
 
-		if (!PlaceholderWorld.adopt(level, player, gameMode)) {
+		if (!snapshot.install(true)) {
 			// The engines are still pointing at a level nobody owns any more; finish the teardown
 			// that was suppressed on the way in.
-			minecraft.levelExtractor.setLevel(null);
+			io.github.bingkkni.noloadingscreen.platform.SceneRenderer.setLevel(minecraft, null);
 			minecraft.particleEngine.setLevel(null);
 			minecraft.gameRenderer.setLevel(null);
 			minecraft.setCameraEntity(null);
@@ -262,10 +305,11 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		}
 
 		markTimeline("NoLoadingScreen 接管即将拆除的旧世界，撤下「重载配置中」界面");
-		if (screen instanceof ServerReconfigScreen && minecraft.gui.screen() != screen) {
-			// PlaceholderWorld unmounted it. We now owe it a tick every client tick: its own tick()
-			// is what drives Connection#tick for the whole configuration phase.
-			suppressedConfigScreen = screen;
+		// adopt() drops the mounted screen while the placeholder is bound. Keep the original
+		// instance captured above so its configuration connection continues to be ticked after the
+		// screen is gone; reading ClientUi.screen(minecraft) here would always see null.
+		if (screen instanceof ServerReconfigScreen reconfigScreen) {
+			suppressedConfigScreen = reconfigScreen;
 		}
 	}
 
@@ -276,19 +320,21 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * reasons, so they get separate names.
 	 */
 	public static void onConfigurationFinished() {
-		if (phase == JoinPhase.CONFIGURING || phase == JoinPhase.SERVER_BOOT) {
+		if (phase == JoinPhase.CONFIGURING || phase == JoinPhase.SERVER_BOOT || phase == JoinPhase.CONNECTING) {
 			enterPhase(JoinPhase.WAITING_WORLD);
 		}
 	}
 
 	/** Called from {@code ClientPacketListener#handleLogin}: the real world is about to arrive. */
 	public static void onLoginStart() {
+		suppressedConnectScreen = null; // success: release ownership, do not close the connection
+		connectPlaceholderAttempted = false;
+		resourceScreen = null;
 		releaseSuppressedConfigScreen(false);
 		// A snapshot that survived this far was never consumed, which can only mean the switch did
 		// not go the way it usually does. Dropping it keeps a stale level out of the next teardown.
-		adoptLevel = null;
-		adoptPlayer = null;
-		adoptGameMode = null;
+		outgoing = null;
+		DisconnectedWorldView.clear();
 		PlaceholderWorld.uninstall();
 	}
 
@@ -299,8 +345,18 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * left alone here. {@link #onConfigurationStarted} consumes it a few statements later.
 	 */
 	public static void onLevelTornDown() {
-		releaseSuppressedConfigScreen(false);
+		releaseWaitingOwners();
+		DisconnectedWorldView.clear();
 		PlaceholderWorld.uninstall();
+	}
+
+	private static void releaseWaitingOwners() {
+		resourceScreen = null;
+		resourcePlaceholderAttempted = false;
+		suppressedConnectScreen = null;
+		connectPlaceholderAttempted = false;
+		clearHold();
+		releaseSuppressedConfigScreen(false);
 	}
 
 	/**
@@ -309,39 +365,65 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * or the next join reports a total that includes the one that never finished.
 	 */
 	public static void onDisconnected() {
-		onLevelTornDown();
-		adoptLevel = null;
-		adoptPlayer = null;
-		adoptGameMode = null;
+		onDisconnected(false);
+	}
+
+	/** A real disconnection still cleans up all join state; only KickWarn keeps the local scene. */
+	public static void onDisconnected(final boolean keepPlaceholder) {
+		ConnectScreen connecting = suppressedConnectScreen;
+		if (connecting != null) abortConnecting(connecting);
+		ServerReconfigScreen screen = suppressedConfigScreen;
+		if (screen != null) {
+			Connection connection = ((ServerReconfigScreenAccessor) screen).nls$connection();
+			if (connection.isConnected()) {
+				connection.disconnect(ConnectScreen.ABORT_CONNECTION);
+			}
+		}
+		if (keepPlaceholder) releaseWaitingOwners();
+		else onLevelTornDown();
+		outgoing = null;
 		phase = JoinPhase.NONE;
 		phaseStartMs = -1L;
 		joinStartMs = -1L;
 		phaseLog.clear();
+		lastJoinPhases.clear();
 		loadStartMs = -1L;
+		gateReleased = false;
+		forcingLoadingPackets = false;
+		levelReadySeen = false;
+		timelineStart = -1L;
+		timelineLast = -1L;
 		clearOverlay();
+		LoadingWork.reset();
 	}
 
-	/**
-	 * Vanilla enables the Disconnect button on {@code delayTicker == 600} — an exact equality, so a
-	 * counter that is already past it never trips again.
-	 */
-	private static final int CONFIG_DISCONNECT_DELAY_TICKS = 600;
+	/** Same lock and ordering as vanilla Cancel, including an in-flight connector. */
+	private static void abortConnecting(final ConnectScreen screen) {
+		ConnectScreenAccessor access = (ConnectScreenAccessor) screen;
+		synchronized (screen) {
+			access.nls$setAborted(true);
+			var future = access.nls$channelFuture();
+			if (future != null) {
+				future.cancel(true);
+				access.nls$setChannelFuture(null);
+			}
+			Connection connection = access.nls$connection();
+			if (connection != null && connection.isConnected()) connection.disconnect(ConnectScreen.ABORT_CONNECTION);
+		}
+	}
 
 	private static void releaseSuppressedConfigScreen(final boolean remount) {
-		Screen screen = suppressedConfigScreen;
+		ServerReconfigScreen screen = suppressedConfigScreen;
 		suppressedConfigScreen = null;
-		if (!remount || !(screen instanceof ServerReconfigScreen old)) {
+		if (!remount || screen == null) {
 			return;
 		}
 
-		// A fresh instance rather than the same object: see ServerReconfigScreenAccessor.
-		ServerReconfigScreenAccessor source = (ServerReconfigScreenAccessor) old;
-		ServerReconfigScreen replacement = new ServerReconfigScreen(old.getTitle(), source.nls$connection());
-		Minecraft.getInstance().gui.setScreen(replacement);
-		// Carry the wait across, so the button unlocks on the schedule the player has already been
-		// waiting through rather than starting its 30 seconds over.
-		((ServerReconfigScreenAccessor) replacement)
-			.nls$setDelayTicker(Math.min(source.nls$delayTicker(), CONFIG_DISCONNECT_DELAY_TICKS - 1));
+		ServerReconfigScreen replacement = new ServerReconfigScreen(
+			screen.getTitle(), ((ServerReconfigScreenAccessor) screen).nls$connection());
+		ClientUi.setScreen(Minecraft.getInstance(), replacement);
+		((ServerReconfigScreenAccessor) replacement).nls$disconnectButton().active = true;
+		suppressedConfigScreen = replacement;
 	}
 
 	/**
@@ -351,46 +433,113 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 */
 	public static void onPlaceholderFailed() {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui.screen() != null || minecraft.level != null) {
+		if (minecraft.level != null
+			|| (ClientUi.screen(minecraft) != null && !(ClientUi.screen(minecraft) instanceof LoadingPauseScreen))) {
 			return;
 		}
 
+		if (DisconnectedWorldView.active()) {
+			Screen disconnected = DisconnectedWorldView.fallbackScreen();
+			onDisconnected();
+			ClientUi.setScreen(minecraft, disconnected);
+			return;
+		}
 		if (suppressedConfigScreen != null) {
 			releaseSuppressedConfigScreen(true);
 			return;
 		}
-
-		LevelLoadTracker tracker = overlayTracker;
-		if (tracker != null) {
-			minecraft.gui.setScreen(new LevelLoadingScreen(tracker, LevelLoadingScreen.Reason.OTHER));
-		}
+		Screen fallback = waitingScreen();
+		if (fallback != null) ClientUi.setScreen(minecraft, fallback);
 	}
 
-	/**
-	 * Called from the head of {@code Minecraft#tick}. Two jobs: keep the unmounted "Reconfiguring"
-	 * screen ticking (it owns {@code Connection#tick} for this phase), and hand it back if the
-	 * player asks for it — its Disconnect button is the only way out of a configuration phase that
-	 * never ends, and a void you cannot leave is a worse trap than a screen you cannot skip.
-	 */
+	/** A prompt returning to a null parent after cosmetic failure must not land on the title screen. */
+	public static @Nullable Screen waitingScreen() {
+		if (DisconnectedWorldView.active()) return DisconnectedWorldView.fallbackScreen();
+		if (SavingWorldView.saving()) return new net.minecraft.client.gui.screens.GenericMessageScreen(ClientUi.savingLevel());
+		if (suppressedConnectScreen != null) return suppressedConnectScreen;
+		if (suppressedConfigScreen != null) return suppressedConfigScreen;
+		if (resourceScreen != null) return resourceScreen;
+		return overlayTracker == null ? null : new LevelLoadingScreen(overlayTracker, LevelLoadingScreen.Reason.OTHER);
+	}
+
+	/** The connection remains ours until login or disconnect, not merely until a screen opens. */
 	public static void tickPlaceholder() {
 		Minecraft minecraft = Minecraft.getInstance();
-
-		Screen screen = suppressedConfigScreen;
+		tryResourcePlaceholder();
+		ConnectScreen connecting = suppressedConnectScreen;
+		if (connecting != null && minecraft.level == null && ClientUi.screen(minecraft) != connecting) {
+			connecting.tick(); // vanilla retains all login/configuration protocol and kick handling
+		}
+		ServerReconfigScreen screen = suppressedConfigScreen;
 		if (screen != null) {
-			if (minecraft.gui.screen() != null || minecraft.level != null) {
-				// Something else took the screen, or the world arrived: not ours to drive any more.
+			if (minecraft.level != null) {
 				releaseSuppressedConfigScreen(false);
-			} else if (InputConstants.isKeyDown(minecraft.getWindow(), InputConstants.KEY_ESCAPE)) {
-				markTimeline("玩家按下 Esc，交还「重载配置中」界面");
-				releaseSuppressedConfigScreen(true);
-			} else {
-				// Vanilla's own tick(), unchanged: it advances the 600-tick disconnect-button
-				// delay and calls Connection#tick / handleDisconnection.
+			} else if (ClientUi.screen(minecraft) != screen) {
+				// Reuse vanilla's owner, including immediate disconnection delivery. Its 600-tick
+				// delay only enables the fallback button; it must never gate delivery of a kick.
 				screen.tick();
 			}
 		}
 
-		PlaceholderWorld.tick();
+		try {
+			PlaceholderWorld.tick();
+		} catch (Throwable failure) {
+			// Collision/visual queries can be modified by other mods too. Keep their failures
+			// inside the same cosmetic fallback boundary as placeholder rendering; connection
+			// ticking above is deliberately outside this catch.
+			PlaceholderWorld.onRenderFailed(failure);
+		}
+	}
+
+	public static boolean openLoadingPauseScreen() {
+		Minecraft minecraft = Minecraft.getInstance();
+		if (!PlaceholderWorld.active()) return false;
+		if (ClientUi.screen(minecraft) != null) return true;
+		if (DisconnectedWorldView.active()) {
+			ClientUi.setScreen(minecraft, new LoadingPauseScreen(Component.translatable("disconnect.lost"), DisconnectedWorldView::leave));
+			return true;
+		}
+		ConnectScreen connecting = suppressedConnectScreen;
+		if (connecting != null) {
+			ConnectScreenAccessor access = (ConnectScreenAccessor) connecting;
+			ClientUi.setScreen(minecraft, new LoadingPauseScreen(access.nls$status(), () -> {
+				onDisconnected();
+				ClientUi.setScreen(minecraft, access.nls$parent());
+			}));
+		} else if (suppressedConfigScreen != null) {
+			ClientUi.setScreen(minecraft, new LoadingPauseScreen(suppressedConfigScreen.getTitle(),
+				((ServerReconfigScreenAccessor) suppressedConfigScreen).nls$connection()));
+		} else {
+			// A synchronous save/resource wait cannot safely be cancelled by abandoning its stack.
+			ClientUi.setScreen(minecraft, new LoadingPauseScreen(SavingWorldView.visible() ? ClientUi.savingLevel()
+				: Component.translatable(phase.translationKey()), (Runnable) null));
+		}
+		return true;
+	}
+
+	public static void onScreenChanging(final @Nullable Screen screen) {
+		if (screen instanceof ConnectScreen connecting) {
+			if (connecting != suppressedConnectScreen) {
+				onDisconnected();
+				// Capture the owner when mounted, not at its first encryption tick: a pack
+				// prompt can replace it before that tick ever runs. No placeholder starts yet.
+				if (NoLoadingScreenConfig.get().enabled && !((ConnectScreenAccessor) connecting).nls$aborted()) {
+					suppressedConnectScreen = connecting;
+				}
+			}
+			return;
+		}
+		// Datapack failures, backup/low-disk warnings and cancellations retain vanilla ownership.
+		if (resourceScreen != null && screen != null && screen != resourceScreen
+			&& !(screen instanceof LevelLoadingScreen || screen instanceof LoadingInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)) {
+			onDisconnected();
+			return;
+		}
+		if ((PlaceholderWorld.active() || suppressedConfigScreen != null || suppressedConnectScreen != null)
+			&& (screen instanceof DisconnectedScreen || screen instanceof TitleScreen
+				|| screen instanceof JoinMultiplayerScreen)) {
+			onDisconnected();
+		}
 	}
 
 	/** True while the placeholder is standing in for a world that has not arrived yet. */
@@ -398,18 +547,35 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		return PlaceholderWorld.active();
 	}
 
-	/** True while Esc would hand the "Reconfiguring" screen — and its Disconnect button — back. */
+	/** Independent of HUD visibility: includes the real player's missing-chunk safety hold. */
+	public static boolean isLoading() {
+		return NoLoadingScreenConfig.get().enabled && (PlaceholderWorld.active() || phase != JoinPhase.NONE || holdActive);
+	}
+
+	public static Component blockedMessage(final boolean command) {
+		return Component.translatable(command ? "noloadingscreen.message.commandBlocked" : "noloadingscreen.message.chatBlocked")
+			.withStyle(ChatFormatting.RED);
+	}
+
+	public static boolean blockOutgoingMessage(final boolean command) {
+		if (!isLoading()) return false;
+		ClientUi.systemMessage(Minecraft.getInstance(), blockedMessage(command));
+		return true;
+	}
+
+	/** True while Esc can open a loading menu with an immediately usable Disconnect button. */
 	public static boolean canRevealConfigScreen() {
-		return suppressedConfigScreen != null;
+		return suppressedConfigScreen != null || suppressedConnectScreen != null;
 	}
 
 	// --- The join itself ----------------------------------------------------------------------
 
 	/** Called from {@code LevelLoadTracker#startClientLoad}: a new world is about to stream in. */
 	public static void onLoadStart(final LevelLoadTracker tracker) {
-		loadStartMs = Util.getMillis();
+		LoadingWork.worldArriving();
+		loadStartMs = ClientRuntime.millis();
 		gateReleased = false;
-		holdActive = false;
+		clearHold();
 		overlayTracker = tracker;
 		overlayStartMs = loadStartMs;
 		levelReadySeen = false;
@@ -432,9 +598,9 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		}
 
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.level != null && minecraft.gui.screen() instanceof LevelLoadingScreen) {
+		if (minecraft.level != null && ClientUi.screen(minecraft) instanceof LevelLoadingScreen) {
 			markTimeline("NoLoadingScreen 撤下沿用中的地形加载界面，画面交还给玩家");
-			minecraft.gui.setScreen(null);
+			ClientUi.setScreen(minecraft, null);
 		}
 	}
 
@@ -467,24 +633,25 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			forcingLoadingPackets = false;
 		}
 
-		Runnable release = tracker.getPlayerCompiledSectionCallback();
-		if (release == null) {
-			return;
-		}
+		LevelAccess.release(tracker);
+	}
 
+	/** Called by the API-family hook at vanilla's readiness decision, before notification. */
+	public static void onGateReleased() {
 		Minecraft minecraft = Minecraft.getInstance();
 		LocalPlayer player = minecraft.player;
 		ClientLevel level = minecraft.level;
 
 		boolean chunkPresent = player != null && level != null && hasPlayerChunk(level, player);
-		release.run();
 
 		if (!gateReleased) {
 			gateReleased = true;
 			markTimeline("放行闸门 (instant, 玩家区块已到达=" + chunkPresent + ")");
 			if (!chunkPresent && player != null) {
 				holdActive = true;
+				heldPlayer = player;
 				holdPos = player.position();
+				player.setOnGround(false);
 			}
 		}
 	}
@@ -497,8 +664,9 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			return;
 		}
 
-		long terrainMs = Util.getMillis() - loadStartMs;
+		long terrainMs = ClientRuntime.millis() - loadStartMs;
 		loadStartMs = -1L;
+		LoadingWork.worldArriving();
 
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
 		endTimeline("进入世界 (发送 ServerboundPlayerLoadedPacket)");
@@ -519,10 +687,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 	 * never entered the phase tracker at all.
 	 */
 	private static void reportJoinTime(final long totalMs) {
-		Minecraft.getInstance()
-			.gui
-			.chatListener()
-			.handleSystemMessage(Component.translatable("noloadingscreen.message.joinTime", totalMs), false);
+		ClientUi.systemMessage(Minecraft.getInstance(), Component.translatable("noloadingscreen.message.joinTime", totalMs));
 
 		if (lastJoinPhases.isEmpty()) {
 			return;
@@ -543,10 +708,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			);
 		}
 
-		Minecraft.getInstance()
-			.gui
-			.chatListener()
-			.handleSystemMessage(Component.translatable("noloadingscreen.message.joinPhases", breakdown), false);
+		ClientUi.systemMessage(Minecraft.getInstance(), Component.translatable("noloadingscreen.message.joinPhases", breakdown));
 	}
 
 	/**
@@ -566,7 +728,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			return null;
 		}
 
-		if (overlayStartMs >= 0L && Util.getMillis() - overlayStartMs > OVERLAY_TIMEOUT_MS) {
+		if (overlayStartMs >= 0L && ClientRuntime.millis() - overlayStartMs > OVERLAY_TIMEOUT_MS) {
 			return clearOverlay();
 		}
 
@@ -594,7 +756,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		if (!config.enabled || !config.loadingOverlay) {
 			return false;
 		}
-		return PlaceholderWorld.active() || overlayTracker() != null;
+		return !DisconnectedWorldView.active() && (PlaceholderWorld.active() || overlayTracker() != null);
 	}
 
 	private static @Nullable LevelLoadTracker clearOverlay() {
@@ -603,27 +765,48 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		return null;
 	}
 
-	/**
-	 * Called from the tail of {@code LocalPlayer#aiStep}. While the player is standing in a chunk
-	 * that has not arrived yet, every block around them is air, so vanilla physics would drop them
-	 * through the world and the server would rubber-band them straight back.
-	 */
-	public static void onPlayerAiStep(final LocalPlayer player) {
-		if (!holdActive) {
-			return;
-		}
+	private static void clearHold() {
+		holdActive = false;
+		heldPlayer = null;
+		holdPos = Vec3.ZERO;
+	}
 
+	/** The anchor belongs to one real player and follows every authoritative teleport. */
+	public static void onPlayerPositionReceived() {
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (holdActive && player != null && player == heldPlayer) {
+			holdPos = player.position();
+		}
+	}
+
+	private static boolean shouldHold(final LocalPlayer player) {
+		if (!holdActive) return false;
 		ClientLevel level = Minecraft.getInstance().level;
-		if (level == null || hasPlayerChunk(level, player)) {
-			holdActive = false;
-			markTimeline("玩家区块到达，恢复正常物理");
-			return;
+		if (!NoLoadingScreenConfig.get().enabled || player != heldPlayer || level == null
+			|| player.level() != level || player.isPassenger()) {
+			clearHold();
+			return false;
 		}
+		// Test the server's anchor, not a position physics may already have moved across a border.
+		if (LevelAccess.hasChunk(level, holdPos)) {
+			clearHold();
+			markTimeline("玩家区块到达，恢复正常物理");
+			return false;
+		}
+		return true;
+	}
 
+	/** An absent floor is not a landing: vanilla cancels ability flight when onGround is true. */
+	public static void beforePlayerAiStep(final LocalPlayer player) {
+		if (shouldHold(player)) player.setOnGround(false);
+	}
+
+	/** Undo only local movement, never yaw/pitch or the server's latest teleport. */
+	public static void onPlayerAiStep(final LocalPlayer player) {
+		if (!shouldHold(player)) return;
 		player.setDeltaMovement(Vec3.ZERO);
 		player.setPos(holdPos.x, holdPos.y, holdPos.z);
-
-		player.setOnGround(true);
+		player.setOnGround(false);
 		player.resetFallDistance();
 	}
 
@@ -641,7 +824,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 		if (!NoLoadingScreenConfig.get().enabled) {
 			return;
 		}
-		long now = Util.getMillis();
+		long now = ClientRuntime.millis();
 		timelineStart = now;
 		timelineLast = now;
 		LOGGER.info("[timeline] ===== {} =====", label);
@@ -655,7 +838,7 @@ public final class NoLoadingScreen implements ClientModInitializer {
 			beginTimeline(label);
 			return;
 		}
-		long now = Util.getMillis();
+		long now = ClientRuntime.millis();
 		LOGGER.info("[timeline] 累计 {} ms  (本段 +{} ms)  {}", now - timelineStart, now - timelineLast, label);
 		timelineLast = now;
 	}
@@ -668,6 +851,6 @@ public final class NoLoadingScreen implements ClientModInitializer {
 
 	private static boolean hasPlayerChunk(final ClientLevel level, final LocalPlayer player) {
 		ChunkPos chunkPos = player.chunkPosition();
-		return level.hasChunk(chunkPos.x(), chunkPos.z());
+		return LevelAccess.hasChunk(level, chunkPos);
 	}
 }

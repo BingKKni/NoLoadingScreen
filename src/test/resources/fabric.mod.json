@@ -1,0 +1,16 @@
+{
+	"schemaVersion": 1,
+	"id": "noloadingscreen_verification",
+	"version": "1.0.0",
+	"name": "NoLoadingScreen headless verification",
+	"environment": "client",
+	"entrypoints": {
+		"preLaunch": [
+			"io.github.bingkkni.noloadingscreen.verification.MixinVerification"
+		]
+	},
+	"mixins": ["noloadingscreen.verification.mixins.json"],
+	"depends": {
+		"noloadingscreen": "*"
+	}
+}

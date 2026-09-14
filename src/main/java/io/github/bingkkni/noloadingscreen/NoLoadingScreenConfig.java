@@ -8,11 +8,11 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import net.fabricmc.loader.api.FabricLoader;
+import io.github.bingkkni.noloadingscreen.platform.LoaderServices;
 
 public final class NoLoadingScreenConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("noloadingscreen.json");
+	private static final Path PATH = LoaderServices.configDirectory().resolve("noloadingscreen.json");
 
 	private static NoLoadingScreenConfig instance;
 
@@ -22,7 +22,7 @@ public final class NoLoadingScreenConfig {
 	/** Let WASD drift the camera around inside the placeholder. Purely local; nothing is sent. */
 	public boolean placeholderFreeMove = true;
 
-	/** Keep drawing that same progress bar, chunk map and status line after the screen is gone. */
+	/** Keep the progress bar and status text after the screen is gone, without the chunk rectangle. */
 	public boolean loadingOverlay = true;
 
 	/**

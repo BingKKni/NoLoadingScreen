@@ -1,16 +1,32 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
+import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.mojang.authlib.yggdrasil.ProfileResult;
 import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.systems.RenderSystem;
+import io.github.bingkkni.noloadingscreen.DisconnectedWorldView;
+import io.github.bingkkni.noloadingscreen.LocalSkinPreloader;
+import io.github.bingkkni.noloadingscreen.JoinClassWarmup;
+import io.github.bingkkni.noloadingscreen.LoadingWaitLoop;
+import io.github.bingkkni.noloadingscreen.LoadingWork;
+import io.github.bingkkni.noloadingscreen.PlaceholderRegistries;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig;
 import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
+import io.github.bingkkni.noloadingscreen.SavingWorldView;
+import io.github.bingkkni.noloadingscreen.compat.SodiumShaderWarmup;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.network.Connection;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.multiplayer.ServerReconfigScreen;
@@ -20,12 +36,16 @@ import net.minecraft.server.WorldStem;
 import net.minecraft.server.packs.repository.PackRepository;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.storage.LevelStorageSource.LevelStorageAccess;
+import org.jspecify.annotations.Nullable;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Where the placeholder world is wired into the client loop, plus the one change that makes a
@@ -46,6 +66,22 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(Minecraft.class)
 public abstract class MinecraftMixin {
+	@Shadow @Final private CompletableFuture<@Nullable ProfileResult> profileFuture;
+	@Shadow private @Nullable Connection pendingConnection;
+	@Unique private boolean nls$drainingTasks;
+	@Unique private long nls$taskStart;
+	@Unique private int nls$tasksProcessed;
+
+	/** Resources are ready, even when quick play skips the title screen. Never join the profile future. */
+	@Inject(method = "onGameLoadFinished", at = @At("HEAD"))
+	private void nls$preloadSkin(final CallbackInfo ci) {
+		Minecraft minecraft = (Minecraft) (Object) this;
+		JoinClassWarmup.prepare();
+		LocalSkinPreloader.preload(minecraft.getUser().getProfileId(), this.profileFuture, minecraft.getSkinManager(), minecraft);
+		SodiumShaderWarmup.prepare();
+		PlaceholderRegistries.preload();
+	}
+
 	@Shadow
 	private void updateLevelInEngines(final ClientLevel level) {
 		throw new AssertionError();
@@ -85,11 +121,58 @@ public abstract class MinecraftMixin {
 		NoLoadingScreen.tickPlaceholder();
 	}
 
+	@WrapOperation(method = "runTick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;runAllTasks()V"))
+	private void nls$measureClientTasks(final Minecraft minecraft, final Operation<Void> original) {
+		long timing = LoadingWork.startTiming();
+		boolean outer = !this.nls$drainingTasks;
+		if (outer) {
+			this.nls$drainingTasks = true;
+			this.nls$taskStart = System.nanoTime();
+			this.nls$tasksProcessed = 0;
+		}
+		try {
+			original.call(minecraft);
+		} finally {
+			if (outer) this.nls$drainingTasks = false;
+			LoadingWork.endTiming("client tasks", timing);
+		}
+	}
+
+	@ModifyReturnValue(method = "shouldRun", at = @At("RETURN"))
+	private boolean nls$yieldLoadingTasks(final boolean original) {
+		if (!original || !this.nls$drainingTasks) return original;
+		// Only the ordinary frame drain is budgeted. BlockableEventLoop's managedBlock bypasses
+		// shouldRun while a task needs synchronous completion, including resource/save waits.
+		if (this.nls$tasksProcessed > 0 && LoadingWork.active() && System.nanoTime() - this.nls$taskStart >= 4_000_000L) return false;
+		this.nls$tasksProcessed++;
+		return true;
+	}
+
+	@WrapOperation(method = "runTick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;tick()V"))
+	private void nls$measureClientTick(final Minecraft minecraft, final Operation<Void> original) {
+		long timing = LoadingWork.startTiming();
+		try { original.call(minecraft); } finally { LoadingWork.endTiming("client tick", timing); }
+	}
+
+	@Inject(method = "pauseGame", at = @At("HEAD"), cancellable = true)
+	private void nls$pauseLoading(final boolean suppressPauseMenu, final CallbackInfo ci) {
+		if (NoLoadingScreen.openLoadingPauseScreen()) {
+			ci.cancel();
+		}
+	}
+
+	@Inject(method = "toggleFriendsScreen", at = @At("HEAD"), cancellable = true)
+	private void nls$blockNestedJoinUi(final CallbackInfoReturnable<Boolean> cir) {
+		// A friend invite can start another join from inside the synchronous save/resource stack.
+		if (PlaceholderWorld.active()) cir.setReturnValue(true);
+	}
+
 	@Inject(method = "handleKeybinds", at = @At("HEAD"), cancellable = true)
-	private void nls$suppressKeybinds(final CallbackInfo ci) {
+	private void nls$handlePlaceholderKeybinds(final CallbackInfo ci) {
 		if (PlaceholderWorld.active()) {
-			// Otherwise every click banked during the wait fires the instant the world opens.
-			PlaceholderWorld.discardQueuedClicks();
+			// Vanilla assumes a non-null live player here. Preserve only local UI controls and drain
+			// every gameplay click so nothing fires when the real world arrives.
+			PlaceholderWorld.handleSafeKeybinds();
 			ci.cancel();
 		}
 	}
@@ -123,21 +206,20 @@ public abstract class MinecraftMixin {
 	 */
 	@WrapMethod(method = "renderFrame")
 	private void nls$renderFrame(final boolean advanceGameTime, final Operation<Void> original) {
-		if (!PlaceholderWorld.bind()) {
-			original.call(advanceGameTime);
-			return;
-		}
-
+		long timing = LoadingWork.startTiming();
+		boolean bound = PlaceholderWorld.bind();
 		try {
-			original.call(advanceGameTime);
+			// This also covers direct resource/save wait frames, not just runTick's final frame.
+			original.call(advanceGameTime || bound && (SavingWorldView.visible() || DisconnectedWorldView.visible()));
 		} catch (Throwable t) {
+			if (!bound) throw t;
 			PlaceholderWorld.onRenderFailed(t);
 			if (!nls$handBackSurface()) {
-				// Nothing will ever be drawn again (see below). A crash report beats a frozen window.
 				throw t;
 			}
 		} finally {
-			PlaceholderWorld.unbind();
+			if (bound) PlaceholderWorld.unbind();
+			LoadingWork.endTiming("render frame", timing);
 		}
 	}
 
@@ -200,7 +282,7 @@ public abstract class MinecraftMixin {
 	private void nls$skipForcedFrame(final Minecraft minecraft, final boolean advanceGameTime) {
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
 		if (config.enabled) {
-			Screen screen = minecraft.gui.screen();
+			Screen screen = ClientUi.screen(minecraft);
 			// Already dropped by this mod: there is nothing new to show.
 			if (screen == null && (minecraft.level != null || PlaceholderWorld.active())) {
 				return;
@@ -236,18 +318,46 @@ public abstract class MinecraftMixin {
 		return NoLoadingScreenConfig.get().enabled || server.isReady();
 	}
 
-	@Inject(method = "doWorldLoad", at = @At("RETURN"))
-	private void nls$singleplayerLoadStarted(
-		final LevelStorageAccess levelSourceAccess,
-		final PackRepository packRepository,
-		final WorldStem worldStem,
-		final Optional<GameRules> gameRules,
-		final boolean newWorld,
-		final CallbackInfo ci
-	) {
-		// worldStem carries the only registry set that exists at this point — the connection that
-		// would normally supply one has not finished its handshake yet.
-		NoLoadingScreen.onSingleplayerLoadStart(worldStem.registries().compositeAccess());
+	@WrapMethod(method = "doWorldLoad")
+	private void nls$bootWaitClock(final LevelStorageAccess access, final PackRepository packs, final WorldStem stem,
+		final Optional<GameRules> rules, final boolean newWorld, final Operation<Void> original) {
+		if (!NoLoadingScreenConfig.get().enabled) {
+			original.call(access, packs, stem, rules, newWorld);
+			return;
+		}
+		LoadingWaitLoop.begin();
+		try {
+			original.call(access, packs, stem, rules, newWorld);
+		} finally {
+			LoadingWaitLoop.end();
+		}
+	}
+
+	@Redirect(method = "doWorldLoad", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
+	private void nls$bootWaitFrame(final Minecraft minecraft, final boolean advanceGameTime) {
+		if (LoadingWaitLoop.active() && PlaceholderWorld.active()) LoadingWaitLoop.frame(minecraft);
+		else minecraft.renderFrame(advanceGameTime);
+	}
+
+	@WrapOperation(method = "doWorldLoad", at = @At(value = "INVOKE",
+		target = "Lnet/minecraft/client/Minecraft;disconnectWithProgressScreen()V"))
+	private void nls$keepPreparedScene(final Minecraft minecraft, final Operation<Void> original) {
+		// This is an empty-session cleanup, NOT a real disconnect. Repeating it after resource
+		// preparation destroys the existing scene/camera and forces a one-frame progress screen.
+		if (!(NoLoadingScreen.preparingResources() && PlaceholderWorld.active() && minecraft.level == null
+			&& minecraft.player == null && minecraft.getSingleplayerServer() == null && this.pendingConnection == null)) {
+			original.call(minecraft);
+		}
+	}
+
+	@WrapOperation(method = "doWorldLoad", at = @At(value = "INVOKE",
+		target = "Lnet/minecraft/client/gui/Gui;setScreen(Lnet/minecraft/client/gui/screens/Screen;)V"))
+	private void nls$singleplayerLoadStarted(final Gui gui, final Screen screen, final Operation<Void> original,
+		final LevelStorageAccess access, final PackRepository packs, final WorldStem stem,
+		final Optional<GameRules> rules, final boolean newWorld) {
+		// Capture vanilla's tracker BEFORE hiding its screen, and keep the same early scene.
+		NoLoadingScreen.onSingleplayerLoadStart(stem.registries().compositeAccess(), (LevelLoadingScreen) screen);
+		original.call(gui, screen);
 	}
 
 	@Inject(method = "clearClientLevel", at = @At("HEAD"))
@@ -261,16 +371,68 @@ public abstract class MinecraftMixin {
 		NoLoadingScreen.markTimeline("旧世界拆除完毕 <- 这段是客户端自己的开销");
 	}
 
-	@Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("HEAD"))
-	private void nls$disconnect(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final CallbackInfo ci) {
-		NoLoadingScreen.onDisconnected();
+	@WrapMethod(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V")
+	private void nls$disconnect(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final Operation<Void> original) {
+		boolean keep = DisconnectedWorldView.begin(screen, keepResourcePacks);
+		NoLoadingScreen.onDisconnected(keep);
+		if (!keep) SavingWorldView.capture();
+		boolean completed = false;
+		try {
+			original.call(screen, keepResourcePacks, stopSound);
+			completed = true;
+		} finally {
+			SavingWorldView.finish();
+			if (keep) DisconnectedWorldView.finish(completed);
+		}
+	}
+
+	@Inject(
+		method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/Gui;setScreen(Lnet/minecraft/client/gui/screens/Screen;)V")
+	)
+	private void nls$showSavingWorld(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final CallbackInfo ci) {
+		SavingWorldView.install();
+	}
+
+	@Redirect(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
+	private void nls$interactiveSaveFrame(final Minecraft minecraft, final boolean advanceGameTime) {
+		if (SavingWorldView.visible()) LoadingWaitLoop.frame(minecraft);
+		else minecraft.renderFrame(advanceGameTime);
+	}
+
+	@Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;setScreenAndShow(Lnet/minecraft/client/gui/screens/Screen;)V"))
+	private void nls$savingFinished(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final CallbackInfo ci) {
+		SavingWorldView.finish();
+		DisconnectedWorldView.install();
+	}
+
+	@WrapOperation(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;resetData()V"))
+	private void nls$keepDisconnectedCamera(final GameRenderer renderer, final Operation<Void> original) {
+		if (!DisconnectedWorldView.active()) original.call(renderer);
+	}
+
+	@WrapOperation(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At(value = "INVOKE",
+		target = "Lnet/minecraft/client/Minecraft;updateLevelInEngines(Lnet/minecraft/client/multiplayer/ClientLevel;Z)V"))
+	private void nls$keepDisconnectedEngines(final Minecraft minecraft, final ClientLevel level, final boolean stopSound,
+		final Operation<Void> original) {
+		if (!DisconnectedWorldView.visible()) {
+			original.call(minecraft, level, stopSound);
+			return;
+		}
+		// Like configuration adoption, retain built meshes, but never retain a connection owner.
+		if (stopSound) minecraft.getSoundManager().stop();
+		this.pendingConnection = null;
+		minecraft.updateTitle();
 	}
 
 	@Inject(method = "setLevel", at = @At("HEAD"))
 	private void nls$setLevelStart(final ClientLevel level, final CallbackInfo ci) {
 		// Hand the render engines back before vanilla points them at the real world.
 		NoLoadingScreen.onLevelTornDown();
-		NoLoadingScreen.markTimeline("收到新世界，开始装配 (setLevel) <- 在此之前是等服务端");
+		NoLoadingScreen.markTimeline("开始装配新世界 (setLevel；此前也可能包含客户端拆除和登录处理)");
 	}
 
 	@Inject(method = "setLevel", at = @At("RETURN"))
