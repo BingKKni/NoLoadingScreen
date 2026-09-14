@@ -89,7 +89,3 @@ NeoForge 1.21.10 /1.21.11 对应 Sodium 0.7.3 /0.8.14、ViaForge 4.3.1 / 4.3.2�
 ## 许可
 
 [MIT](LICENSE) © 2026 小布丁 ([BingKKni](https://github.com/BingKKni))
-
-## AI 生成内容声明
-
-本 Mod 除美术资源、README 资源外的其他内容（包括代码）均由 AI 生成。英文版 README 由 AI 翻译。
