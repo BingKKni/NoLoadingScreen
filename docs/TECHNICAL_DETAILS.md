@@ -274,7 +274,7 @@ See [evidence and limitations (Chinese)](LOADING_IMPROVEMENTS.zh-CN.md) and [col
 
 ### 8. First-Join Cold Start (Further 1.0.5 Changes)
 
-User logs still showed a 367 ms login handler and a 782 ms packet drain. An isolated RX 580/OpenGL JFR recording sampled JAR reads, class loading and Mixin transformations during first placeholder installation. Startup now resolves selected first-join type signatures without executing initializers or constructors and without concurrent class-loading workers. The three actual supported Sodium terrain pipelines are also precompiled before world entry, on the owning GPU thread.
+Client logs from retesting still showed a 367 ms login handler and a 782 ms packet drain. An isolated RX 580/OpenGL JFR recording sampled JAR reads, class loading and Mixin transformations during first placeholder installation. Startup now resolves selected first-join type signatures without executing initializers or constructors and without concurrent class-loading workers. The three actual supported Sodium terrain pipelines are also precompiled before world entry, on the owning GPU thread.
 
 The synthetic void uses one worker. The first redundant Sodium reload is coalesced only for an unused renderer at the same distance and resource generation; resource reloads, use/edits and unloading invalidate that exemption. An occupied Fabric configuration addon now also prevents synthetic PLAY construction. Slow diagnostics identify packet classes and Sodium initialization/teardown and include directly pumped resource-wait frames.
 
@@ -366,7 +366,7 @@ The last item applies at a different stage from "Allow Movement While Loading." 
 
 ### Verification Status
 
-The current build runs two repeatable checks through `./gradlew build`: `movementTest` (speeds, sprint-jump momentum, ground/wall collision, double-tap controls, damping and interpolation) and `verifyMixins` (headless Fabric target transformation, connection ownership, original disconnect reasons, cleanup, loading-menu buttons, perspective/held keys, message guards, sky probe, arm smoothing, null-connection initialization/update regression, split render clocks, avatar animation, menu physics, local breaking/placement rules, key and fractional-wheel routing, local inventory lifecycle, and offline-placeholder selected-item switching/countdown/pause/empty-slot clearing). The optional `verifyOptimizationCompatibility` task runs a combined transformation matrix with caller-supplied real mod jars. The verifier exits before opening a game window and is excluded from the distributable JAR. These checks do not replace testing transfers on a real multiplayer server. The real-client measurements below describe earlier testing, not validation of this update.
+The current build runs two repeatable checks through `./gradlew build`: `movementTest` (speeds, sprint-jump momentum, ground/wall collision, double-tap controls, damping and interpolation) and `verifyMixins` (headless Fabric target transformation, connection ownership, original disconnect reasons, cleanup, loading-menu buttons, perspective/held keys, message guards, sky probe, arm smoothing, null-connection initialization/update regression, split render clocks, avatar animation, menu physics, local breaking/placement rules, key and fractional-wheel routing, local inventory lifecycle, and offline-placeholder selected-item switching/countdown/pause/empty-slot clearing). The optional `verifyOptimizationCompatibility` task runs a combined transformation matrix with caller-supplied real mod jars. The optional `verifyRepairGpu` task (every target) runs an isolated real-GPU regression of the save wait with injected input, KickWarn, block pick, hand swap, sprint FOV and inventory frames; see [VERSIONS.md](VERSIONS.md#verification-limits). The verifier exits before opening a game window and is excluded from the distributable JAR. These checks do not replace testing transfers on a real multiplayer server. The real-client measurements below describe earlier testing, not validation of this update.
 
 - `./gradlew build` passes.
 - **All Mixins were confirmed to apply in practice.** A temporary `preLaunch` entry point forcibly loaded every target class to trigger Mixin transformation,
@@ -404,12 +404,12 @@ cd NoLoadingScreen
 ./gradlew build
 ```
 
-The artifact is written to `build/libs/noloadingscreen-1.0.5.jar`. **JDK 25** is required.
+The artifact is written to `build/libs/NoLoadingScreen-1.1.0-Fabric-26.2.jar`. **JDK 25** is required.
 
 To publish a release, push a tag beginning with `v`. CI uses the version number from the tag to build and automatically create a GitHub Release with the jar attached.
 
 ```bash
-git tag v1.0.5 && git push origin v1.0.5
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 > Minecraft 26.1 is the first stable release whose client is **not obfuscated**; 1.21.11 was the last obfuscated release ([Mojang announcement](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition), [Fabric confirmation](https://fabricmc.net/2026/03/14/261)). The 26.1 `version_manifest` no longer contains `client_mappings`, and Yarn stopped at 1.21.11.

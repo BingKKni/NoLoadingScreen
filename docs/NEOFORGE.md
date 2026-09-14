@@ -1,14 +1,16 @@
 # NeoForge 1.21.10 / 1.21.11
 
+> 本文保留原有 1.21 支持与验证记录。新增 Fabric / NeoForge / Forge 26.x 的独立构建、图标检查和验证边界见 [版本矩阵](VERSIONS.md)。原有两个 NeoForge 目标不变；1.21 的保存退出输入、疾跑 FOV、物品提示修复与 `verifyRepairGpu` 回归见 [测试说明](TESTING.zh-CN.md)。
+
 ## 支持与构建 / Support and builds
 
 三套独立构建，共享功能状态机；**不能混用不同加载器/游戏版本的 JAR**。NeoForge 使用正常映射工具链，不使用 Mojang 的独立 unobfuscated 实验版。
 
-| Target | Loader / Java | Command (repository root) | Main artifact (version 1.0.5) |
+| Target | Loader / Java | Command (repository root) | Main artifact (version 1.1.0) |
 |---|---|---|---|
-| Fabric 26.2 | Fabric Loader ≥0.19.3 / Java25 | `./gradlew build check` | `build/libs/noloadingscreen-1.0.5.jar` |
-| NeoForge 1.21.10 | NeoForge21.10.64 / Java21 | `./gradlew -p platforms/neoforge-1.21.10 build check` | `platforms/neoforge-1.21.10/build/libs/noloadingscreen-neoforge-1.21.10-1.0.5.jar` |
-| NeoForge 1.21.11 | NeoForge21.11.45 / Java21 | `./gradlew -p platforms/neoforge-1.21.11 build check` | `platforms/neoforge-1.21.11/build/libs/noloadingscreen-neoforge-1.21.11-1.0.5.jar` |
+| Fabric 26.2 | Fabric Loader ≥0.19.3 / Java25 | `./gradlew build check` | `build/libs/NoLoadingScreen-1.1.0-Fabric-26.2.jar` |
+| NeoForge 1.21.10 | NeoForge21.10.64 / Java21 | `./gradlew -p platforms/neoforge-1.21.10 build check` | `platforms/neoforge-1.21.10/build/libs/NoLoadingScreen-1.1.0-NeoForge-1.21.10.jar` |
+| NeoForge 1.21.11 | NeoForge21.11.45 / Java21 | `./gradlew -p platforms/neoforge-1.21.11 build check` | `platforms/neoforge-1.21.11/build/libs/NoLoadingScreen-1.1.0-NeoForge-1.21.11.jar` |
 
 NeoForge metadata accepts exactly its named Minecraft release and NeoForge `[21.10.64,21.11)` / `[21.11.45,21.12)` respectively. Only the pinned loader versions above were tested. Gradle9.5.1 and ModDevGradle2.0.147 are used; no global Gradle/JDK configuration changes are needed. If toolchain discovery needs help, supply your own local path with `-Dorg.gradle.java.installations.paths=/path/to/jdk21`. `-Pversion=...` overrides the artifact version. Sources JARs are built alongside the main artifacts.
 
@@ -16,7 +18,7 @@ NeoForge metadata accepts exactly its named Minecraft release and NeoForge `[21.
 
 ## 官方未混淆实验版 / Official unobfuscated experiment
 
-正常发布的1.21.10、1.21.11仍是混淆 JAR + 官方映射，并不等于独立实验构建。Mojang 的 [1.21.11 官方实验 ZIP](https://piston-data.mojang.com/v1/objects/82332dfb17146de34cb7a36d2b910e3b2009191a/1_21_11_unobfuscated.zip)（已校验 SHA1 `82332dfb17146de34cb7a36d2b910e3b2009191a`）内的启动器 ID 为 `1.21.11_unobfuscated`；其独立 client/server 对象分别为 `4509ee9b65f226be61142d37bf05f8d28b03417b`、`3ca78d5068bf9b422f694d3f0820e289581c0f0d`。[实验版本历史](https://minecraft.wiki/w/Unobfuscated_version)记载从25w45a开始；本次检索的官方清单及该历史中未找到1.21.10的独立实验包。这里仅陈述已检索范围，不把未找到当作未来不会发布的保证。
+正常发布的 1.21.10、1.21.11 仍是混淆 JAR + 官方映射，并不等于独立实验构建。Mojang 的 [1.21.11 官方实验 ZIP](https://piston-data.mojang.com/v1/objects/82332dfb17146de34cb7a36d2b910e3b2009191a/1_21_11_unobfuscated.zip)（已校验 SHA1 `82332dfb17146de34cb7a36d2b910e3b2009191a`）内的启动器 ID 为 `1.21.11_unobfuscated`；其独立 client/server 对象分别为 `4509ee9b65f226be61142d37bf05f8d28b03417b`、`3ca78d5068bf9b422f694d3f0820e289581c0f0d`。[实验版本历史](https://minecraft.wiki/w/Unobfuscated_version)记载从25w45a开始；本次检索的官方清单及该历史中未找到1.21.10的独立实验包。这里仅陈述已检索范围，不把未找到当作未来不会发布的保证。
 
 The separate experiment is **not** a replacement for the normal release artifacts used by NeoForge. Both builds here retain the standard NeoForm mapped toolchain; experimental client/server JARs must not be substituted into a normal NeoForge installation.
 

@@ -3,20 +3,16 @@
 **English** | [简体中文](README_zh-CN.md)
 
 [![build](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml/badge.svg)](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml)
-[![Minecraft](https://img.shields.io/badge/Minecraft-26.2%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](https://www.minecraft.net/)
-[![Loaders](https://img.shields.io/badge/Loader-Fabric%20%2F%20NeoForge-dbd0b4)](docs/NEOFORGE.md)
+[![Minecraft](https://img.shields.io/badge/Minecraft-26.1.x%20%7C%2026.2%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](docs/VERSIONS.md)
+[![Loaders](https://img.shields.io/badge/Loader-Fabric%20%2F%20NeoForge%20%2F%20Forge-dbd0b4)](docs/VERSIONS.md)
 [![Environment](https://img.shields.io/badge/Environment-Client-blue)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 **Stop staring at loading screens while joining a world.**
 
-NoLoadingScreen is a client-side Fabric / NeoForge mod that hides Minecraft's "Loading terrain" and "Reconfiguring" screens when creating or joining a world, changing dimensions, or switching servers. Instead, it displays an interactive placeholder or the world you just left while the new world and its chunks stream in.
+NoLoadingScreen is a client-side Fabric / NeoForge / Forge mod that hides Minecraft's "Loading terrain" and "Reconfiguring" screens when creating or joining a world, changing dimensions, or switching servers. Instead, it displays an interactive placeholder or the world you just left while the new world and its chunks stream in.
 
 > NoLoadingScreen primarily changes how loading is presented and when the client enters the world, while also optimizing parts of the world-loading process.
-
-## AI Disclosure
-
-Except for the artwork and README resources, all other content in this mod, including its code, is AI-generated. The English README is translated by AI.
 
 ## Features
 
@@ -48,17 +44,22 @@ Choose the matching target; do not mix loader/game-version artifacts:
 
 | Minecraft | Loader | Java |
 |---|---|---|
-| 26.2 | Fabric Loader ≥0.19.3 | 25 |
+| 26.1 | Fabric / NeoForge (beta) / Forge | 25 |
+| 26.1.1 | Fabric / NeoForge (beta) / Forge | 25 |
+| 26.1.2 | Fabric / NeoForge / Forge | 25 |
+| 26.2 | Fabric / NeoForge / Forge | 25 |
 | 1.21.10 | NeoForge21.10.64 | 21 |
 | 1.21.11 | NeoForge21.11.45 | 21 |
 
-1. Install [Fabric Loader](https://fabricmc.net/use/installer) or [NeoForge](https://neoforged.net/) for your target.
-2. Obtain the matching artifact from [Releases](https://github.com/BingKKni/NoLoadingScreen/releases), or build it using the [support/build matrix](docs/NEOFORGE.md). Fabric keeps `noloadingscreen-x.y.z.jar`; NeoForge names include both loader and Minecraft version.
+Pinned loader versions and individual artifacts are listed in the [version matrix](docs/VERSIONS.md). Fabric requires Loader >=0.19.3.
+
+1. Install [Fabric Loader](https://fabricmc.net/use/installer), [NeoForge](https://neoforged.net/), or [Forge](https://files.minecraftforge.net/) for your target.
+2. Obtain the matching artifact from [Releases](https://github.com/BingKKni/NoLoadingScreen/releases), or build it using the [support/build matrix](docs/VERSIONS.md). All release JARs use `NoLoadingScreen-version-loader-minecraft.jar`, for example `NoLoadingScreen-1.1.0-Fabric-26.2.jar`.
 3. Place the file in `.minecraft/mods/`.
 
 This mod only needs to be installed on the client. Servers do not need it.
 
-Fabric optionally uses [Mod Menu](https://modrinth.com/mod/modmenu). NeoForge exposes the same settings in its Mod list. The configuration file also remains editable directly.
+Fabric optionally uses [Mod Menu](https://modrinth.com/mod/modmenu). NeoForge and Forge expose the same settings in their Mod lists. The configuration file also remains editable directly.
 
 ## Configuration
 
@@ -72,6 +73,8 @@ Open the settings screen through Mod Menu, or edit `.minecraft/config/noloadings
 | Show Join Time | Off | Prints total and per-phase join times in chat after entering the world |
 
 ## Compatibility
+
+New 26.x targets have their own [verification scope](docs/VERSIONS.md#verification-limits). Existing optional-mod results below do not certify them by themselves. NeoForge 26.2 enables the same exact-version Sodium `0.9.2+mc26.2` private optimizations as Fabric 26.2, verified with the real Sodium NeoForge jar; Forge 26.x and Fabric 26.1 keep Sodium's native scheduling.
 
 NeoForge1.21.10 /1.21.11: exact Sodium0.7.3 /0.8.14 and ViaForge4.3.1 /4.3.2 checks, broader optional matrix, GPU-smoke evidence and limits are documented [here](docs/NEOFORGE.md). Neither mod is required or bundled.
 
@@ -106,8 +109,12 @@ Interested in the loading state machine, placeholder world, packet safety, Mixin
 ./gradlew build
 ```
 
-This root command builds Fabric26.2 into `build/libs/`. NeoForge targets use separate `-p platforms/neoforge-1.21.10` / `-p platforms/neoforge-1.21.11` builds; see [commands and artifact names](docs/NEOFORGE.md). The build also runs movement-model and headless Mixin regression checks. See the [manual transfer-testing checklist (Chinese)](docs/TESTING.zh-CN.md) for in-game validation.
+This root command still builds Fabric 26.2 into `build/libs/`. Other targets use separate `-p platforms/<loader>-<minecraft>` builds; see [commands and artifact names](docs/VERSIONS.md). Builds run their applicable headless regression and artifact checks. See the [manual transfer-testing checklist (Chinese)](docs/TESTING.zh-CN.md) for in-game validation.
 
 ## License
 
 [MIT](LICENSE) (c) 2026 BingKKni ([BingKKni](https://github.com/BingKKni))
+
+## AI Disclosure
+
+Except for the artwork and README resources, all other content in this mod, including its code, is AI-generated. The English README is translated by AI.

@@ -147,7 +147,7 @@ java.lang.IllegalStateException
   也不存在「客户端偷跑几格被拉回」这种情况。
 - **绑定限于局部调用，并在 finally 中还原。** 渲染、鼠标转视角、初始化、整个局部移动/视觉更新及必要的界面初始化/点击临时使用占位字段；不绑定整个 `Minecraft.tick`，也不绑定连接驱动。正常游戏 tick、数据包处理与生命周期事件仍看到原版的空世界。
 
-初始化姿势也必须处于上述绑定内：`updateSwimming` 会经 `AbstractClientPlayer.getPlayerInfo` 访问 `Minecraft.getConnection`。此前在绑定前初始化就是本次单人日志中空指针异常的原因。
+初始化姿势也必须处于上述绑定内：`updateSwimming` 会经 `AbstractClientPlayer.getPlayerInfo` 访问 `Minecraft.getConnection`。此前在绑定前初始化就是日志中该单人空指针异常的原因。
 
 唯一一处必须额外处理的是 `Minecraft#handleKeybinds`：原版只在没有界面时才会走到它，而「没有界面」在原版里
 蕴含「有玩家」，不少分支解引用 `this.player` 或发包。占位阶段保留 F5、聊天、指令框、E、数字键/滚轮、F 及本地左右键操作；剩余游戏点击丢弃。加载期间禁止补全请求，并在聊天提交和 `ClientPacketListener.sendChat/sendCommand` 两层拦截，分别显示红色「当前状态无法发言!」「当前状态无法执行指令!」。E 打开 `LoadingInventoryScreen`：继承 AbstractContainerScreen，使用一次性玩家的物品栏和原版人物预览，不额外显示警告文字。`slotClicked` 绕过 MultiPlayerGameMode，仅调用本地菜单逻辑；禁用合成、丢弃及网络驱动的鼠标扩展。其输入回调和 final tick 单独绑定占位字段，`onClose/removed` 不调用会发包的原版关闭/丢弃流程。配置连接继续独立 tick。
@@ -267,17 +267,17 @@ if (this.connection.isConnected()) {
 
 保存、配置和 KickWarn 使用共享的 `OutgoingWorld` 快照。KickWarn 仍执行原版实际断线清理，仅保留场景和网格；原版断线详情页作为安全回退及退出目的地来源。左键消费原版按下事件，不再在长按转头时不断破坏方块。
 
-1.0.5 在被踢后的占位绑定内把冒险/旁观控制器改为生存，玩家模式查询复用该控制器而不修改共享 PlayerInfo。中键通过原版克隆、方块实体序列化/组件收集与 Inventory 选取方法工作，保留头颅皮肤等客户端可用数据；不调用服务器选取/查询包。详见[本轮增量说明](LOADING_IMPROVEMENTS.zh-CN.md)。
+1.0.5 在被踢后的占位绑定内把冒险/旁观控制器改为生存，玩家模式查询复用该控制器而不修改共享 PlayerInfo。中键通过原版克隆、方块实体序列化/组件收集与 Inventory 选取方法工作，保留头颅皮肤等客户端可用数据；不调用服务器选取/查询包。详见[增量说明](LOADING_IMPROVEMENTS.zh-CN.md)。
 
 ### 七、皮肤交接与加载工作调度（1.0.5 增量）
 
 真实本地玩家在 PlayerInfo 未到达或服务器皮肤 Future 未完成时，暂用已完成的账户皮肤；查询先走原版，以保证下载启动。服务器完成的自定义/默认皮肤与空结果都优先，其他玩家不受影响。
 
-加载期间客户端收包队列采用 8 ms 软预算，普通帧任务队列采用 4 ms 软预算，只在完整包/任务边界让出，FIFO、异常与主线程归属保留。原版同步区块构建交给 `compileAsync`，Sodium 可选钩子避免 `awaitCompletion` 的主线程等待/抢任务；显式完整帧模式保留等待。提前就绪后延续 5 秒，随后恢复普通玩法策略。合成虚空的有效渲染距离最多 2，不改用户保存的选项。
+加载期间客户端收包队列采用 8 ms 软预算，普通帧任务队列采用 4 ms 软预算，只在完整包/任务边界让出，FIFO、异常与主线程归属保留。原版同步区块构建交给 `compileAsync`，Sodium 可选钩子避免 `awaitCompletion` 的主线程等待/抢任务；显式完整帧模式保留等待。提前就绪后延续 5 秒，随后恢复普通玩法策略。合成虚空的有效渲染距离最多 2，不改动已保存的选项。
 
 预算不抢占单个操作，渲染器拆除、GPU 上传/着色器编译、注册表应用及其他 Mod 的回调仍可能卡帧。`[loading-work]` 限量记录超过 100 ms 的慢调用。实际客户端日志确认 ViaFabricPlus 4.6.2 的 RETURN 收尾仍需要活 channel，故接管改到整个处理器返回之后；Fabric play addon 被占用时直接拒绝合成。
 
-证据、实现边界及冷/热启动对照方法见[本轮说明](LOADING_IMPROVEMENTS.zh-CN.md)和[测试说明](TESTING.zh-CN.md)。已做无窗口回归及实际 Sodium/Fabric API/ViaFabricPlus JAR 转换检查，未完成本次整合包 FPS 和实服验收。
+证据、实现边界及冷/热启动对照方法见[增量说明](LOADING_IMPROVEMENTS.zh-CN.md)和[测试说明](TESTING.zh-CN.md)。已做无窗口回归及实际 Sodium/Fabric API/ViaFabricPlus JAR 转换检查，未完成完整整合包 FPS 和实服验收。
 
 ### 八、首次进图冷启动（1.0.5 追加）
 
@@ -361,7 +361,7 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 ## 兼容性与已知限制
 
 - **纯客户端**，服务端不需要装。
-- **Sodium 私有钩子只对当前最新正式版按精确版本启用。** 已验证 `0.9.2+mc26.2` 的目标布局与行为；未知或预发布版本安全关闭这些私有优化。占位世界装卸仍可能触发渲染器重建和工作线程退出，本轮没有将整套 GPU 资源拆除移到其他线程。
+- **Sodium 私有钩子只对当前最新正式版按精确版本启用。** 已验证 `0.9.2+mc26.2` 的目标布局与行为；未知或预发布版本安全关闭这些私有优化。占位世界装卸仍可能触发渲染器重建和工作线程退出，目前没有将整套 GPU 资源拆除移到其他线程。
 - **常见 Fabric 优化组合已做实际 JAR 的无窗口目标转换检查。** 同一矩阵包含 Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.3、RRLS 5.2.8、Sodium 0.9.2 和 ViaFabricPlus 5.0.1；额外组合覆盖 Bobby 5.2.15、Distant Horizons 3.2.0-b、FastQuit 3.1.5 与 Reese's Sodium Options 2.2.3。这只能证明这些精确版本加载时 NoLoadingScreen 钩子成功保留，不能替代 GPU 或玩法测试。除 Sodium 的精确私有优化外，生产代码优先通过可串联的原版目标与生命周期兼容，不引入脆弱的第三方私有 API 依赖。
 - ⚠️ **占位世界期间，别的模组在渲染钩子里看到的是那个假世界。** 绑定只发生在一帧渲染之内，
   所以 tick 事件、数据包处理里它们看到的仍是原版的 `null`；但如果某个模组在渲染回调里对
@@ -375,7 +375,7 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 
 ### 验证状态
 
-当前 `./gradlew build` 会执行两项可重复检查：`movementTest`（速度、跑跳惯性、落地/墙壁、双击控制、阻尼与插值断言）以及 `verifyMixins`（无窗口 Fabric 环境中的目标类 Mixin 转换、连接驱动权、原断线原因保留、状态清理、加载菜单按钮、F5 与按键保留、消息拦截、天空探针、手臂缓动、空连接初始化/更新回归、拆分插值时钟、本地动画、菜单内物理、即时破坏/放置规则、按键和小数滚轮路由、本地物品栏生命周期，以及离线占位快捷栏物品名的切换、倒计时、暂停与空格清除）。另有可选 `verifyOptimizationCompatibility` 使用调用者提供的实际 Mod JAR 执行组合转换矩阵。验证程序会在创建游戏窗口前退出，不包含在可分发 JAR 内。这些检查不能替代真实多人服务器切服测试。下方实机数据属于此前测试，并不代表本次更新已经完成实机验证。
+当前 `./gradlew build` 会执行两项可重复检查：`movementTest`（速度、跑跳惯性、落地/墙壁、双击控制、阻尼与插值断言）以及 `verifyMixins`（无窗口 Fabric 环境中的目标类 Mixin 转换、连接驱动权、原断线原因保留、状态清理、加载菜单按钮、F5 与按键保留、消息拦截、天空探针、手臂缓动、空连接初始化/更新回归、拆分插值时钟、本地动画、菜单内物理、即时破坏/放置规则、按键和小数滚轮路由、本地物品栏生命周期，以及离线占位快捷栏物品名的切换、倒计时、暂停与空格清除）。另有可选 `verifyOptimizationCompatibility` 使用调用者提供的实际 Mod JAR 执行组合转换矩阵；可选 `verifyRepairGpu`（所有目标）在隔离的真实 GPU 客户端中回归保存等待注入输入、KickWarn、方块拾取、换手、疾跑 FOV 与物品栏帧，命令见[测试说明](TESTING.zh-CN.md)。验证程序会在创建游戏窗口前退出，不包含在可分发 JAR 内。这些检查不能替代真实多人服务器切服测试。下方实机数据属于此前测试，并不代表本次更新已经完成实机验证。
 
 - `./gradlew build` 通过。
 - **全部 Mixin 确认实际生效**：通过临时的 `preLaunch` 入口强制加载全部目标类触发 Mixin 变换，
@@ -413,12 +413,12 @@ cd NoLoadingScreen
 ./gradlew build
 ```
 
-产物在 `build/libs/noloadingscreen-1.0.5.jar`。需要 **JDK 25**。
+产物在 `build/libs/NoLoadingScreen-1.1.0-Fabric-26.2.jar`。需要 **JDK 25**。
 
 发版：推一个 `v` 开头的 tag，CI 会用 tag 里的版本号构建并自动创建 GitHub Release，把 jar 附上去。
 
 ```bash
-git tag v1.0.5 && git push origin v1.0.5
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 > Minecraft 26.1 是首个客户端**不再混淆**的正式版，1.21.11 是最后一个混淆正式版（[Mojang 公告](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition)，[Fabric 确认](https://fabricmc.net/2026/03/14/261)）。26.1 的 `version_manifest` 已经没有 `client_mappings`，Yarn 也停在了 1.21.11，

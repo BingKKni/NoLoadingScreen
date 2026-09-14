@@ -1,10 +1,41 @@
 # 切服修复测试说明
 
-> NeoForge1.21.10/.11 的独立构建、CLIENT 转换/行为检查、可选模组矩阵及 GPU 冒烟命令见 [NEOFORGE.md](NEOFORGE.md)。下文保留原 Fabric26.2 证据与实机清单；不能把它们当作 NeoForge 已完成的服务器玩法验证。
+> NeoForge 1.21.10/.11 的独立构建、CLIENT 转换/行为检查、可选模组矩阵及 GPU 冒烟命令见 [NEOFORGE.md](NEOFORGE.md)。下文保留原 Fabric 26.2 证据与实机清单。
 
-适用版本：Minecraft 26.2、Fabric Loader 0.19.3 或更高、Java 25。当前修复版：1.0.5。
+适用版本：Minecraft 26.2、Fabric Loader 0.19.3 或更高、Java 25。当前版本：1.1.0。
 
-## 本轮：优化 Mod 兼容矩阵与离线快捷栏文字修复
+## 1.1.0：多平台实机修复与 GPU 回归
+
+NeoForge 1.21.10/1.21.11/26.1/26.2、Forge 26.2 与 Fabric 26.1 上实测发现的问题及处理结果：
+
+| 反馈 | 根因 | 处理 |
+|---|---|---|
+| 1.21.x 单人保存退出时视角抽搐，1.21.11 无法移动 | 保存等待由菜单点击触发，此时已经在一个客户端任务内部；1.21 的保存帧路径在呈现时会再次轮询 GLFW，而原版 `Minecraft.execute` 在任务嵌套时把回调排队，只有等待结束后才执行，导致输入部分丢失或整批延后 | `LoadingWaitLoop` 在整个本地帧（轮询、tick、绘制）期间内联分发同线程输入，不再只在自己的轮询内内联。不改动任务队列，等待期间仍不抽干客户端任务/数据包 |
+| 1.21.x KickWarn 占位中疾跑不改变 FOV | 1.21 的 FOV 插值位于 `GameRenderer.tickFov`（私有），26.x 在 `Camera.tick` 内；1.21 场景 tick 只推进相机 | 1.21 平台 `SceneRenderer.tickCamera` 通过 accessor 先调用 `tickFov` 再 tick 相机 |
+| 1.21.x KickWarn 物品栏悬停无物品提示 | 旧版容器界面把 tooltip 提交留给具体子类 | 1.21 的 `InventoryScreenAdapter.render` 在 `super.render` 后调用 `renderTooltip` |
+| 中键按住转向再松开会拾取别的方块 | **未复现**。原版 `KeyMapping.click` 只在按下时触发，`pickBlock` 读取按下那一刻的 `hitResult`；7 个平台的真实 GLFW 按下/按住/转向/松开回归均保留第一次瞄准的方块 | 保留断言；需补充复现步骤、是否开着菜单及 `latest.log` |
+| NeoForge 26.2 冷启动后首次进图掉帧 | 26.x NeoForge/Forge/Fabric 26.1 层此前用 `supported()=false` 覆盖 Sodium 白名单，所以类型预热、地形管线预编译、单工作线程、首次重建合并全部未启用 | 删除 NeoForge 26.x 的覆盖文件，共享的精确版本白名单 `0.9.2+mc26.2` 直接生效。新增 NeoForge 26.x `verifyCompatibility`，用真实 Sodium NeoForge JAR 验证 7 个私有钩子和实际 collector 行为 |
+| NeoForge 26.2 快捷栏物品放入背包时没有换手动画 | `Player.tick` 会比较 `lastItemInMainHand` 并在物品不同时重置 `itemSwapTicker`；占位视觉 tick 只推进 ticker 不比较 | `PlaceholderVisuals.trackMainHandItem` 复刻原版比较：`matches` 相同则跳过，`isSameItem` 不同则 ticker 归零，保存副本 |
+| Forge 26.2 无法加载（ResourcePackInfo / pack.mcmeta 警告） | Forge 读取每个 Mod JAR 的 `pack.mcmeta`，不会补全 | `gradle/forge-pack-resources.gradle` 从游戏 JAR 的 `version.json` 读取 `pack_version` 生成 `pack.mcmeta`；`verifyModernArtifact` 与 Forge 的 `verifyClient` 校验该文件可被 `Pack.readPackMetadata` 解析 |
+
+以上改动都在共享源码或平台适配层内，没有按版本号分支的运行时判断。Sodium NeoForge 发布包把真正的类放在 `META-INF/jarjar/` 内嵌 JAR 中，FML 用 `jarinjar` 定位器加载，因此白名单按 `sodium` 的 Mod 版本判断，不看外层 JAR 内容。
+
+新增 `verifyRepairGpu`（不属于 `check`/CI）：在目标自己的 `build/repair-gpu` 中启动真实 GPU 客户端，依次执行合成占位、提升为实时会话后运行真实的 `Minecraft.disconnect` 保存等待（用 GLFW 回调交换注入 W 键和逐帧鼠标移动，断言视角转动量、玩家位移、相机无回退/无跳变）、多人踢出的 KickWarn、中键按下/按住/转向/松开、换手动画、离线疾跑 FOV、物品栏帧，最后清理并退出。集成服务端探针只覆盖 `isShutdown`/`halt`，不构造服务端、不动存档。
+
+```bash
+# 26.x 目标（JAVA_HOME 指向 JDK 25）；资源索引：26.1 用 30，26.2 用 32
+./gradlew -p platforms/neoforge-26.2 verifyRepairGpu -PassetsDir="/path/to/assets" -PassetIndex=32
+./gradlew -p platforms/neoforge-26.2 verifyRepairGpu -PsmokeModJars="/path/to/sodium-neoforge-0.9.2+mc26.2.jar" -PassetsDir="/path/to/assets" -PassetIndex=32
+./gradlew -p platforms/neoforge-26.2 verifyCompatibility -PcompatibilityJars="/path/to/sodium-neoforge-0.9.2+mc26.2.jar"
+# 1.21 目标（JAVA_HOME 指向 JDK 21）；资源索引：1.21.10 用 27，1.21.11 用 29
+./gradlew -p platforms/neoforge-1.21.11 verifyRepairGpu -PassetsDir="/path/to/assets" -PassetIndex=29
+```
+
+`assetsDir` 可以直接指向 ModDevGradle 的 `downloadAssets` 缓存（默认 `~/.gradle/caches/neoformruntime/assets`）。实测结果：root Fabric 26.2、Fabric 26.1、NeoForge 26.1/26.2、Forge 26.2、NeoForge 1.21.10/1.21.11 七个目标无 Sodium 通过；NeoForge 26.2 与 Fabric 26.2 装载 Sodium `0.9.2+mc26.2` 通过（日志出现 `Prepared Sodium terrain pipelines`）。1.21.11 的保存等待做过红绿对照：撤销修复后视角转动为 0、位移为 0，恢复修复后与注入量一致。测试窗口失去宿主焦点时原版会丢弃鼠标增量，回归会重新置焦并把次数记入日志，不当作 Mod 缺陷。
+
+这些是隔离的短时 GPU 回归，不是整合包、真实存档或服务器验收；1.21.10 的“视角抽搐”在回归中未观测到相机回退，若仍出现请按下方清单保留日志。当前测试所用的 Sodium `0.9.2-alpha.4+mc26.2` 不在白名单内，私有优化不会启用，需换用正式版 `0.9.2+mc26.2`。
+
+## 优化 Mod 兼容矩阵与离线快捷栏文字修复
 
 离线占位世界渲染时会临时绑定玩家，但普通 `Gui.tick` 之前没有为 `Hud.tick` 绑定，因此原版 `toolHighlightTimer` 看不到玩家并停止递减，快捷栏物品名会永久停留。现在只包装 `Gui.tick → Hud.tick(boolean)` 这一处现有调用：保持原版调用次数、暂停语义、物品变化判断和通知时长，同时不让占位玩家进入死亡/睡眠/界面生命周期分支。无窗口回归覆盖切换物品、逐 tick 递减、暂停不递减、切到空格立即清除及绑定还原。
 
@@ -25,9 +56,9 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 
 这证明对应版本能共同解析依赖并完成 Mixin 转换及已有调度断言，不代表 Iris 着色器、EntityCulling 后台线程、完整整合包 FPS 或真实跨协议服务器已经实机验收。渲染器/着色器 Mod 仍须按下方实机清单复测。
 
-## 上轮：首次进图冷启动
+## 首次进图冷启动
 
-本轮不改皮肤逻辑。新增类型预热、Sodium 地形管线预编译、首次渲染器重复重建合并、合成虚空单工作线程，并补齐 Fabric 配置阶段槽位保护。证据与限制见 [增量说明](LOADING_IMPROVEMENTS.zh-CN.md)。启动收尾时间会增加，不宣称所有加载逻辑异步或完全消除首次卡顿。
+此处不改皮肤逻辑。新增类型预热、Sodium 地形管线预编译、首次渲染器重复重建合并、合成虚空单工作线程，并补齐 Fabric 配置阶段槽位保护。证据与限制见 [增量说明](LOADING_IMPROVEMENTS.zh-CN.md)。启动收尾时间会增加，不宣称所有加载逻辑异步或完全消除首次卡顿。
 
 `check` 增加类型解析不执行初始化器/构造器的检查；`verifyLoadingCompatibility` 增加实际管线对象复用、首次重建及资源/视距失效、工作线程隔离、配置 addon 保护。只对已验证的 Sodium 版本启用私有钩子。
 
@@ -39,13 +70,13 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 
 它只在 `build/cold-gpu-run` 运行，使用测试身份和指定的只读资源目录，不打开存档、不建立游戏服务器连接；原版账户/Realms 后台请求可能产生测试身份鉴权错误。显示占位场景 3 秒后检查绑定及交换链并退出，任务超时两分钟，缺少成功标记即失败。测试 Mixin 只在测试资源中，不进可分发 JAR。加 `-PcoldProfile` 可在测试目录生成 `cold-start.jfr`。
 
-已在本机 RX 580/OpenGL 上通过。JFR 指向首次 JAR 读取、类型加载及 Mixin 转换；加入类型预热后，两次独立运行的首次占位安装约 195、197 ms，开发中间态约 311 至 338 ms。此数据不是完整整合包前后版本基准，也不说明真实区块加载已无卡顿。预热后仍约 200 ms 的初始开销和完整整合包/实服帧时间仍须复测。
+已在 RX 580/OpenGL 上通过。JFR 指向首次 JAR 读取、类型加载及 Mixin 转换；加入类型预热后，两次独立运行的首次占位安装约 195、197 ms，开发中间态约 311 至 338 ms。此数据不是完整整合包前后版本基准，也不说明真实区块加载已无卡顿。预热后仍约 200 ms 的初始开销和完整整合包/实服帧时间仍须复测。
 
 检查启动日志的 `Prepared first-join class definitions`、`Prepared Sodium terrain pipelines`；若还有长卡顿，保留新的 `packet <包类>`、`Sodium renderer initialization/teardown` 和 `render frame` 慢日志。嵌套计时不可相加。资源包重载后允许重新编译，真实/接管世界的线程数及视距不得被缩减。
 
-## 上轮：皮肤交接与加载响应
+## 皮肤交接与加载响应
 
-实现和证据见 [加载改进说明](LOADING_IMPROVEMENTS.zh-CN.md)。本轮保持 1.0.5，不改语言文件。已通过常规无窗口检查，以及实际安装的 Sodium 0.9.2 / Fabric API 0.158.0 / ViaFabricPlus 5.0.1 原始 JAR 兼容检查；未宣称完成 FPS 或真实服务器验收。
+实现和证据见 [加载改进说明](LOADING_IMPROVEMENTS.zh-CN.md)。版本保持 1.0.5，不改语言文件。已通过常规无窗口检查，以及实际安装的 Sodium 0.9.2 / Fabric API 0.158.0 / ViaFabricPlus 5.0.1 原始 JAR 兼容检查；未宣称完成 FPS 或真实服务器验收。
 
 新增 `LoadingWorkVerification` 覆盖真实收包/任务队列的软预算、FIFO、至少一个任务前进、原异常路径、非客户端队列隔离、同步完成等待、保护期退出和原版异步建模路由。实体皮肤回归增加占位到真实玩家、无 PlayerInfo、延迟纹理、服务端换肤和完成空结果等情况；另模拟缓存过期返回不同 Future 与账户皮肤迟到，保证就绪判断仍属于原版正在使用的那次查询。
 
@@ -77,7 +108,7 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 
 - 首次资源加载完成时接续原版账户资料 Future，将带有纹理属性的完整 GameProfile 交给 SkinManager；下载、旧版皮肤处理和纹理注册仍由原版负责，不阻塞主线程，也不重复查询账户资料。
 - 保留当前账户的皮肤 Future，供没有 PlayerInfo 的合成占位玩家读取；在主菜单停留超过原版上层缓存的 15 秒后，仍可直接使用已完成的结果。未完成、失败或离线无资料时沿用原版默认皮肤，完成后自动切换。
-- 合成占位玩家在首帧之前同步本地皮肤外层开关和左/右主手，加载期间设置变更也会同步。多人切服保留的旧玩家、其他玩家继续使用原版皮肤路径；本轮增加真实本地玩家等待 PlayerInfo/纹理时的临时缓存衔接，已就绪的服务器皮肤和显示状态仍优先。
+- 合成占位玩家在首帧之前同步本地皮肤外层开关和左/右主手，加载期间设置变更也会同步。多人切服保留的旧玩家、其他玩家继续使用原版皮肤路径；1.0.5 增加真实本地玩家等待 PlayerInfo/纹理时的临时缓存衔接，已就绪的服务器皮肤和显示状态仍优先。
 - 首次多人连接现在从加密阶段（离线服从加入阶段）使用合成占位世界。首次无缓存且立即进图、网络慢或皮肤服务不可用时，不保证首帧已取得真实皮肤，也不会为了皮肤延迟进入世界。
 
 ## 1.0.2 本地交互更新
@@ -118,11 +149,11 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 
 这些是源码核实和无窗口回归，不是已完成真实多人切服/渲染验证的声明。
 
-测试代码不会被打包进 `build/libs/noloadingscreen-1.0.5.jar`。测试使用的模拟连接不能代替真实代理服务器、资源包及其他 Mod 的兼容性测试。
+测试代码不会被打包进 `build/libs/NoLoadingScreen-1.1.0-Fabric-26.2.jar`。测试使用的模拟连接不能代替真实代理服务器、资源包及其他 Mod 的兼容性测试。
 
 ## 实机回归清单
 
-安装测试时移除旧 jar，改用 `noloadingscreen-1.0.5.jar`，不要同时保留两个副本。以下场景应在自己有权限的测试服务器上进行。
+安装测试时移除旧 jar，改用 `NoLoadingScreen-1.1.0-Fabric-26.2.jar`，不要同时保留两个副本。以下场景应在自己有权限的测试服务器上进行。
 
 1. **成功切服**：进入子服后切换到另一子服，等待时可以转动视角；新世界到达后使用服务器提供的位置，不保留占位移动结果。
 2. **切服失败 / KickWarn**：使用 ViaFabricPlus 选择主服支持、目标子服不支持的版本，或让配置阶段拒绝加入。收到断线事件后应立即保留可操作占位，聊天栏显示红色「无法连接到服务器: 」和原始原因，不等 30 秒、不弹出断线页。等待超过一分钟仍留在占位。服务器只是不响应时，仍等待原版网络超时，不伪造被踢消息。
@@ -137,7 +168,7 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 11. **天空与群系**：白天、夜间、雨天及不同群系切服，旧世界环境保持原来的值，而不是一律改成蓝天/正午；检查单人占位世界第一帧不再黑天留太阳。下界、末地维持各自正常天空，不强制改成主世界。
 12. **手部与姿势**：切服前潜行、空中飞行、游泳，等待期间松开 Shift、飞行升降、转动视角，再 F5 切换。空中飞行不再沿用潜行/游泳手部状态；水中仍保留原版水中姿势逻辑。对比眼高和手臂旋转是否逐渐收敛，不能卡在旧偏移。
 13. **普通流程**：检查单人开图、正常多人加入及切换维度；禁用 Mod 后仍走原版加载流程。
-14. **本次单人回归**：连续进入三个不同存档，占位阶段应显示虚空/天空；日志不应再有 `Could not build/install the placeholder world` 或 `Placeholder world failed`。若加载太快无法观察，不算已验证视觉效果。
+14. **单人回归**：连续进入三个不同存档，占位阶段应显示虚空/天空；日志不应再有 `Could not build/install the placeholder world` 或 `Placeholder world failed`。若加载太快无法观察，不算已验证视觉效果。
 15. **帧间流畅度**：在较长的切服间隙，分别飞行、疾跑、潜行/站起并转动视角，确认 FOV、眼高和手部不是每 50 ms 跳一格。F5 下边走边转头、停步，四肢应继续摆动并逐步停下，其他玩家仍冻结。
 16. **物品栏**：等待时按 E，应看到人物预览，且没有多余提示；测试左右键取放/拆分、Shift 整理、拖拽分配、数字键/F 交换物品，并核对快捷栏/手上物品。E/Esc 关闭，重新打开保留本地改动；保持界面到进服、被踢或失败时应自动关闭，真实背包以新服数据为准。
 17. **界面不冻结运动**：起跳、下落、疾跑中分别打开 E 和聊天，应继续惯性/重力/碰撞，不能悬空。动画逐渐回到静止，聊天输入 W、空格等不触发移动/双击飞行。飞行时开界面保持飞行能力，但停止推力。
