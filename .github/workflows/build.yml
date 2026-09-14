@@ -7,6 +7,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      mod_version:
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -30,6 +36,50 @@ jobs:
             java: '21'
             project: 'platforms/neoforge-1.21.11'
             artifacts: 'platforms/neoforge-1.21.11/build/libs/'
+          - target: fabric-26.1
+            java: '25'
+            project: 'platforms/fabric-26.1'
+            artifacts: 'platforms/fabric-26.1/build/libs/'
+          - target: fabric-26.1.1
+            java: '25'
+            project: 'platforms/fabric-26.1.1'
+            artifacts: 'platforms/fabric-26.1.1/build/libs/'
+          - target: fabric-26.1.2
+            java: '25'
+            project: 'platforms/fabric-26.1.2'
+            artifacts: 'platforms/fabric-26.1.2/build/libs/'
+          - target: neoforge-26.1
+            java: '25'
+            project: 'platforms/neoforge-26.1'
+            artifacts: 'platforms/neoforge-26.1/build/libs/'
+          - target: neoforge-26.1.1
+            java: '25'
+            project: 'platforms/neoforge-26.1.1'
+            artifacts: 'platforms/neoforge-26.1.1/build/libs/'
+          - target: neoforge-26.1.2
+            java: '25'
+            project: 'platforms/neoforge-26.1.2'
+            artifacts: 'platforms/neoforge-26.1.2/build/libs/'
+          - target: neoforge-26.2
+            java: '25'
+            project: 'platforms/neoforge-26.2'
+            artifacts: 'platforms/neoforge-26.2/build/libs/'
+          - target: forge-26.1
+            java: '25'
+            project: 'platforms/forge-26.1'
+            artifacts: 'platforms/forge-26.1/build/libs/'
+          - target: forge-26.1.1
+            java: '25'
+            project: 'platforms/forge-26.1.1'
+            artifacts: 'platforms/forge-26.1.1/build/libs/'
+          - target: forge-26.1.2
+            java: '25'
+            project: 'platforms/forge-26.1.2'
+            artifacts: 'platforms/forge-26.1.2/build/libs/'
+          - target: forge-26.2
+            java: '25'
+            project: 'platforms/forge-26.2'
+            artifacts: 'platforms/forge-26.2/build/libs/'
     steps:
       - name: checkout repository
         uses: actions/checkout@v7
@@ -52,7 +102,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: build
-        run: ./gradlew -p ${{ matrix.project }} build check --stacktrace
+        env:
+          BUILD_VERSION: ${{ inputs.mod_version }}
+        run: |
+          args=()
+          if [ -n "$BUILD_VERSION" ]; then args+=("-Pversion=$BUILD_VERSION"); fi
+          ./gradlew -p ${{ matrix.project }} build check --stacktrace "${args[@]}"
 
       - name: capture build artifacts
         uses: actions/upload-artifact@v7
