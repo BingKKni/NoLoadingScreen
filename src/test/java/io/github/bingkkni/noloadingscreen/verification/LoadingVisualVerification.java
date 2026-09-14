@@ -609,6 +609,39 @@ final class LoadingVisualVerification {
 		set(ItemInHandRenderer.class, hands, "offHandItem", player.getOffhandItem());
 		PlaceholderWorld.tick();
 		check((float) get(ItemInHandRenderer.class, hands, "offHandHeight") > 0, "Hand renderer equip animation advances during placeholder ticks");
+
+		// Player.tick's main-hand snapshot: the renderer only raises a new stack gradually when the
+		// swap ticker restarted, and vanilla restarts it from the copied previous stack. The fixture
+		// has no item-model resolver, so keep the renderer's visible stacks equal to the player's;
+		// the real lowering/raising heights are covered by the GPU regression.
+		var inventory = player.getInventory();
+		int selected = inventory.getSelectedSlot();
+		ItemStack held = new ItemStack(Items.STONE, 4);
+		inventory.setItem(selected, held);
+		tickWithVisibleHands(hands, player, 12);
+		check(player.getItemSwapScale(1.0F) == 1.0F, "A settled hand has a complete swap scale");
+		held.setCount(3);
+		tickWithVisibleHands(hands, player, 1);
+		check(player.getItemSwapScale(1.0F) == 1.0F, "In-place count edits of the same item never restart the equip animation");
+		inventory.setItem(selected, ItemStack.EMPTY); // hotbar to backpack: the hand is now empty
+		tickWithVisibleHands(hands, player, 1);
+		check(player.getItemSwapScale(1.0F) < .3F, "Emptying the hand restarts the swap ticker exactly as Player.tick does");
+		tickWithVisibleHands(hands, player, 12);
+		check(player.getItemSwapScale(1.0F) == 1.0F, "The restarted ticker advances again on later local ticks");
+		inventory.setItem(selected, new ItemStack(Items.DIAMOND, 1));
+		tickWithVisibleHands(hands, player, 1);
+		check(player.getItemSwapScale(1.0F) < .3F, "Backpack to hand restarts the ticker too");
+		check(minecraft.player == null && minecraft.level == null, "Hand tracking never leaks the binding");
+		inventory.setItem(selected, ItemStack.EMPTY);
+		tickWithVisibleHands(hands, player, 12);
+	}
+
+	private static void tickWithVisibleHands(final ItemInHandRenderer hands, final LocalPlayer player, final int ticks) throws ReflectiveOperationException {
+		for (int i = 0; i < ticks; i++) {
+			set(ItemInHandRenderer.class, hands, "mainHandItem", player.getMainHandItem());
+			set(ItemInHandRenderer.class, hands, "offHandItem", player.getOffhandItem());
+			PlaceholderWorld.tick();
+		}
 	}
 
 	private static void verifyInventory(final Minecraft minecraft, final LocalPlayer player) throws ReflectiveOperationException {

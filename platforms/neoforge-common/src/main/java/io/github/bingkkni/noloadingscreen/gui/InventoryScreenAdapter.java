@@ -20,6 +20,13 @@ abstract class InventoryScreenAdapter extends AbstractContainerScreen<InventoryM
 		this.player = player;
 	}
 	@Override
+	public void render(final GuiGraphics graphics, final int mouseX, final int mouseY, final float partialTick) {
+		super.render(graphics, mouseX, mouseY, partialTick);
+		// Older container screens leave tooltip submission to their concrete screen.
+		this.renderTooltip(graphics, mouseX, mouseY);
+	}
+
+	@Override
 	protected void renderBg(final GuiGraphics graphics, final float partialTick, final int mouseX, final int mouseY) {
 		graphics.blit(RenderPipelines.GUI_TEXTURED, INVENTORY_LOCATION, this.leftPos, this.topPos, 0, 0, this.imageWidth, this.imageHeight, 256, 256);
 		InventoryScreen.renderEntityInInventoryFollowsMouse(graphics, this.leftPos + 26, this.topPos + 8,

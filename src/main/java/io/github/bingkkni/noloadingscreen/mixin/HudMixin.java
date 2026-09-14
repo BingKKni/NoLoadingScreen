@@ -29,10 +29,14 @@ public abstract class HudMixin {
 	 * The status line is the answer to that, so it does not get gated on the two sources that are
 	 * only ever populated in singleplayer.
 	 *
+	 * <p>Use every RETURN, not just TAIL: Forge draws its layers and returns before the vanilla
+	 * method's final return. A TAIL injection applies successfully but never runs on that path.
+	 * Each completed invocation still draws at most once, after the HUD layers.
+	 *
 	 * <p>{@code require = 0}: an overlay is decoration. If another mod has already reshaped this
 	 * method past recognition, the join still works without it.
 	 */
-	@Inject(method = "extractRenderState", at = @At("TAIL"), require = 0)
+	@Inject(method = "extractRenderState", at = @At("RETURN"), require = 0)
 	private void nls$drawLoadingOverlay(
 		final GuiGraphicsExtractor graphics, final DeltaTracker deltaTracker, final CallbackInfo ci
 	) {

@@ -15,6 +15,7 @@ import io.github.bingkkni.noloadingscreen.platform.ClientRuntime;
 public final class LoadingWaitLoop {
 	private static DeltaTracker.Timer clock;
 	private static int depth;
+	/** True for the whole local frame: our explicit poll and any poll inside the API family's frame path. */
 	private static boolean pollingInput;
 	private static boolean drawing;
 	private static long nextFrameMs;
@@ -40,7 +41,12 @@ public final class LoadingWaitLoop {
 		return clock != null ? clock : vanilla;
 	}
 
-	/** GLFW callbacks queue behind synchronous waits. Outside our poll, preserve the full mod chain. */
+	/**
+	 * Same-thread input polled by a local frame runs at once. The wait never drains the client task
+	 * queue, and a save started from a menu click is already inside a running task, so vanilla's
+	 * {@code Minecraft.execute} would park the callback until the wait ends. Outside a local frame,
+	 * preserve the full mod chain.
+	 */
 	public static void dispatchInput(final Minecraft minecraft, final Runnable input, final Operation<Void> original) {
 		if (pollingInput && minecraft.isSameThread()) input.run();
 		else original.call(minecraft, input);
@@ -55,15 +61,13 @@ public final class LoadingWaitLoop {
 		if (!active() || drawing) return;
 		drawing = true;
 		nextFrameMs = ClientRuntime.millis() + 16L; // resource waits leave time for completion tasks
+		// Never pump general executables/packets during saving. Resource loading still pumps
+		// its own completion executor through the original managedBlock, outside this scope.
+		// Input alone is dispatched inline for the entire frame: older frame paths poll GLFW again
+		// while presenting, and a callback queued there would only run after the wait ends.
+		pollingInput = true;
 		try {
-			// Never pump general executables/packets during saving. Resource loading still pumps
-			// its own completion executor through the original managedBlock, outside this scope.
-			pollingInput = true;
-			try {
-				WaitFrame.pollEvents();
-			} finally {
-				pollingInput = false;
-			}
+			WaitFrame.pollEvents();
 			if (minecraft.getWindow().shouldClose()) minecraft.stop(); // saving must still finish
 			NoLoadingScreen.tryResourcePlaceholder();
 			long now = ClientRuntime.millis();
@@ -88,6 +92,7 @@ public final class LoadingWaitLoop {
 			}
 			WaitFrame.draw(minecraft, PlaceholderWorld.active());
 		} finally {
+			pollingInput = false;
 			drawing = false;
 		}
 	}
