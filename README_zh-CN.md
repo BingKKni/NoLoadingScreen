@@ -1,7 +1,8 @@
 # NoLoadingScreen（NLS，无加载页面）
 
 <p align="center">
-  <img src="src/main/resources/assets/noloadingscreen/icon.png" alt="NoLoadingScreen 图标" width="128">
+  <img src="src/main/resources/assets/noloadingscreen/icon.png" alt="NoLoadingScreen icon" width="128">
+  <img src="image/banner.png" alt="NoLoadingScreen Banner" width="850">
 </p>
 
 [English](README.md) | **简体中文**
@@ -19,12 +20,12 @@ NoLoadingScreen 是一个仅客户端运行的 Forge /Fabric / NeoForge Mod。�
 > NoLoadingScreen 主要改变加载过程的呈现方式和客户端进入世界的时机，并对加载世界逻辑的过程做了一些优化。
 
 ## 功能
+![](image/not_installed.png)
+![](image/installed.png)
 
 - 用可自由观察的虚空占位世界替代加载页面和黑屏
 - 跨服时保留刚刚离开的世界，直到新世界到达
-- 切服等待时按 Esc 可返回占位视图或立即断开连接
-- 切服失败、被踢或意外断线后不退出当前世界，您可自由在当前世界中飞行、穿墙、破坏方块和搭建方块，直到您按 Esc → 主动断开连接退出
-- 可在聊天框及日志中显示完整进图耗时和分段明细
+- 切服失败、被踢或意外断线后不退出当前世界，直到您按 Esc → 主动断开连接
 
 ## 安装
 

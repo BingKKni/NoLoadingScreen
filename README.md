@@ -2,6 +2,7 @@
 
 <p align="center">
   <img src="src/main/resources/assets/noloadingscreen/icon.png" alt="NoLoadingScreen icon" width="128">
+  <img src="image/banner.png" alt="NoLoadingScreen Banner" width="850">
 </p>
 
 **English** | [简体中文](README_zh-CN.md)
@@ -19,12 +20,12 @@ NoLoadingScreen is a client-only Forge / Fabric / NeoForge mod. It hides Minecra
 > NoLoadingScreen primarily changes how loading is presented and when the client enters the world, while also optimizing parts of the world-loading process.
 
 ## Features
+![](image/not_installed.png)
+![](image/installed.png)
 
-- Replaces loading screens and black frames with a free-look void placeholder
-- Keeps the world you just left visible while switching servers
-- Press Esc during a server switch to return to the placeholder view or disconnect immediately
-- Failed switches, kicks, and unexpected disconnects no longer force you out of the current world; you can fly, phase through blocks, break blocks, and place blocks locally until you press Esc → Disconnect
-- Shows the complete join time and per-phase breakdown in chat and logs
+- Replaces loading screens and black frames with a free-look void placeholder!
+- Keeps the world you just left visible while switching servers!
+- Failed switches, kicks, and unexpected disconnects no longer force you out of the current world!
 
 ## Installation
 
