@@ -58,8 +58,8 @@ tasks.named('compileTestJava', JavaCompile) { source sharedTests }
 sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
 sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
 processResources {
-	def metadata = [version: project.version, minecraftVersion: minecraftVersion, neoForgeVersion: neoForgeVersion,
-		nextNeoForgeFamily: upperNeoForgeVersion]
+	def metadata = [version: project.version, minecraftVersionRange: "[${minecraftVersion}]",
+		neoForgeVersionRange: "[${neoForgeVersion},${upperNeoForgeVersion})"]
 	inputs.properties metadata
 	filesMatching('META-INF/neoforge.mods.toml') { expand metadata }
 }

@@ -18,13 +18,13 @@ config="noloadingscreen.neoforge.mixins.json"
 [[dependencies.noloadingscreen]]
 modId="neoforge"
 type="required"
-versionRange="[${neoForgeVersion},${nextNeoForgeFamily})"
+versionRange="${neoForgeVersionRange}"
 ordering="NONE"
 side="CLIENT"
 
 [[dependencies.noloadingscreen]]
 modId="minecraft"
 type="required"
-versionRange="[${minecraftVersion}]"
+versionRange="${minecraftVersionRange}"
 ordering="NONE"
 side="CLIENT"

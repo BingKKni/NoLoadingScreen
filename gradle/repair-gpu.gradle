@@ -74,7 +74,11 @@ tasks.register('verifyRepairGpu', JavaExec) {
             if (token.isBlank() || !candidate.isFile()) throw new GradleException("Missing smoke jar: ${token}")
             candidate
         }
-        if (loaderName == 'Forge') mods += tasks.named('repairSmokeJar').get().archiveFile.get().asFile
+        if (loaderName == 'Forge') {
+            mods += tasks.named('repairSmokeJar').get().archiveFile.get().asFile
+            def release = project.findProperty('verificationArtifact')
+            if (release != null) mods += release
+        }
         // Never sync a directory over a JAR which is also an input in that directory.
         def modsDir = new File(workingDir, 'mods'); modsDir.mkdirs()
         modsDir.listFiles().findAll { it.name.endsWith('.jar') && !mods.contains(it) }.each { it.delete() }

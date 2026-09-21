@@ -66,7 +66,7 @@ tasks.register('movementTest', JavaExec) {
 	description = 'Check placeholder movement speeds, damping, and interpolation.'
 	dependsOn testClasses
 	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'io.github.bingkkni.noloadingscreen.PlaceholderMovementTest'
+	mainClass = 'io.github.bingkkni.noloadingscreen.verification.PlaceholderMovementTest'
 }
 
 tasks.register('verifyMixins', JavaExec) {

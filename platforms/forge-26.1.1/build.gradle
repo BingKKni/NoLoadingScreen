@@ -1,7 +1,0 @@
-plugins {
-    id 'net.minecraftforge.gradle' version '7.0.40'
-}
-ext.minecraftVersion = '26.1.1'
-ext.apiSourceRoot = '../minecraft-26.1/src'
-ext.forgeVersion = '63.0.2'
-apply from: '../forge-modern.gradle'

@@ -40,46 +40,25 @@ jobs:
             java: '21'
             project: 'platforms/neoforge-1.21.11'
             artifacts: 'platforms/neoforge-1.21.11/build/libs/'
-          - target: fabric-26.1
+          - target: fabric-26.1.x
             java: '25'
             project: 'platforms/fabric-26.1'
-            artifacts: 'platforms/fabric-26.1/build/libs/'
-          - target: fabric-26.1.1
-            java: '25'
-            project: 'platforms/fabric-26.1.1'
-            artifacts: 'platforms/fabric-26.1.1/build/libs/'
-          - target: fabric-26.1.2
-            java: '25'
-            project: 'platforms/fabric-26.1.2'
-            artifacts: 'platforms/fabric-26.1.2/build/libs/'
-          - target: neoforge-26.1
+            family: true
+            artifacts: 'platforms/fabric-26.1/build/libs/*-26.1.x*.jar'
+          - target: neoforge-26.1.x
             java: '25'
             project: 'platforms/neoforge-26.1'
-            artifacts: 'platforms/neoforge-26.1/build/libs/'
-          - target: neoforge-26.1.1
-            java: '25'
-            project: 'platforms/neoforge-26.1.1'
-            artifacts: 'platforms/neoforge-26.1.1/build/libs/'
-          - target: neoforge-26.1.2
-            java: '25'
-            project: 'platforms/neoforge-26.1.2'
-            artifacts: 'platforms/neoforge-26.1.2/build/libs/'
+            family: true
+            artifacts: 'platforms/neoforge-26.1/build/libs/*-26.1.x*.jar'
           - target: neoforge-26.2
             java: '25'
             project: 'platforms/neoforge-26.2'
             artifacts: 'platforms/neoforge-26.2/build/libs/'
-          - target: forge-26.1
+          - target: forge-26.1.x
             java: '25'
             project: 'platforms/forge-26.1'
-            artifacts: 'platforms/forge-26.1/build/libs/'
-          - target: forge-26.1.1
-            java: '25'
-            project: 'platforms/forge-26.1.1'
-            artifacts: 'platforms/forge-26.1.1/build/libs/'
-          - target: forge-26.1.2
-            java: '25'
-            project: 'platforms/forge-26.1.2'
-            artifacts: 'platforms/forge-26.1.2/build/libs/'
+            family: true
+            artifacts: 'platforms/forge-26.1/build/libs/*-26.1.x*.jar'
           - target: forge-26.2
             java: '25'
             project: 'platforms/forge-26.2'
@@ -112,6 +91,24 @@ jobs:
           args=()
           if [ -n "$BUILD_VERSION" ]; then args+=("-Pversion=$BUILD_VERSION"); fi
           ./gradlew -p ${{ matrix.project }} build check --stacktrace "${args[@]}"
+
+      - name: verify unchanged family jar on every game version
+        if: matrix.family
+        env:
+          BUILD_VERSION: ${{ inputs.mod_version }}
+          PROJECT: ${{ matrix.project }}
+        run: |
+          args=()
+          if [ -n "$BUILD_VERSION" ]; then args+=("-Pversion=$BUILD_VERSION"); fi
+          jars=("$PROJECT"/build/libs/*-26.1.x.jar)
+          test "${#jars[@]}" -eq 1
+          jar=$(realpath "${jars[0]}")
+          sha256sum "$jar" > "$RUNNER_TEMP/family.sha256"
+          for game in 26.1 26.1.1 26.1.2; do
+            ./gradlew -p "$PROJECT" check --stacktrace "${args[@]}" \
+              "-PtestMinecraftVersion=$game" "-PverificationJar=$jar"
+          done
+          sha256sum --check "$RUNNER_TEMP/family.sha256"
 
       - name: capture build artifacts
         uses: actions/upload-artifact@v7

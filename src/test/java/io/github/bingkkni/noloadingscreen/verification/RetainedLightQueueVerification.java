@@ -130,6 +130,13 @@ public final class RetainedLightQueueVerification {
 	private static ClientLevel level() throws Exception {
 		ClientLevel level = allocate(ClientLevel.class);
 		set(ClientLevel.class, level, "lightUpdateQueue", new ArrayDeque<Runnable>());
+		// Fabric lifecycle hooks enumerate entities during listener.clearLevel(). This fixture has
+		// no entities, but still needs the real empty storage; no entity callbacks can run.
+		set(ClientLevel.class, level, "entityStorage", new net.minecraft.world.level.entity.TransientEntitySectionManager<>(
+			net.minecraft.world.entity.Entity.class, null));
+		if (io.github.bingkkni.noloadingscreen.platform.LoaderServices.modVersion("fabric-lifecycle-events-v1").isPresent()) {
+			set(net.minecraft.world.level.Level.class, level, "loadedChunks", new java.util.HashSet<>());
+		}
 		return level;
 	}
 

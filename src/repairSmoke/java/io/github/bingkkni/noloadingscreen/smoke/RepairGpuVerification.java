@@ -91,6 +91,10 @@ public final class RepairGpuVerification {
 		else if (now - stageStart > STAGE_TIMEOUT_NS) throw new AssertionError("Stage " + stage + " did not finish in time");
 		switch (stage) {
 			case BOOT -> {
+				if (System.getProperty("nls.verify.artifact") != null) {
+					Class.forName("io.github.bingkkni.noloadingscreen.verification.ReleaseArtifactVerification")
+						.getMethod("run").invoke(null);
+				}
 				NoLoadingScreen.LOGGER.info("Repair GPU: {}", RepairFixtures.describeGpu());
 				focus(client, true);
 				RepairFixtures.bindItemComponents(PlaceholderRegistries.ready());

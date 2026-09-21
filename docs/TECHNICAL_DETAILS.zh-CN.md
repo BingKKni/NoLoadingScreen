@@ -374,7 +374,7 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 ## 兼容性与已知限制
 
 - **纯客户端**，服务端不需要装。
-- **Sodium 私有钩子只对每个目标精确验证过的正式版启用。** 已验证 `0.9.2+mc26.2`（26.2）、`0.9.2+mc26.3`（Fabric 26.3）、`0.9.2+mc26.1.2`（26.1.2）与 `0.8.9+mc26.1.1`（26.1/26.1.1，这两个版本仍在首次使用时编译 GL 程序，因此地形着色器预热为空实现）的目标布局与行为；未知或预发布版本安全关闭这些私有优化。各目标的白名单是编译期层文件，见[优化 Mod 适配分析](OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md)。占位世界装卸仍可能触发渲染器重建和工作线程退出，目前没有将整套 GPU 资源拆除移到其他线程。
+- **Sodium 私有钩子只对每个目标精确验证过的正式版启用。** 已验证 `0.9.2+mc26.2`（26.2）、`0.9.2+mc26.3`（Fabric 26.3）、`0.9.2+mc26.1.2`（26.1.2）与 `0.8.9+mc26.1.1`（26.1/26.1.1，这两个版本仍在首次使用时编译 GL 程序，因此地形着色器预热为空实现）的目标布局与行为；未知或预发布版本安全关闭这些私有优化。26.1.x 统一产物在 Fabric/NeoForge 间共用 API 族白名单，同时保留这两个已验证的 Sodium 版本；引擎和私有注入代码不变，其他版本继续使用各自策略。见[版本与同 JAR 运行验证矩阵](VERSIONS.md)。占位世界装卸仍可能触发渲染器重建和工作线程退出，目前没有将整套 GPU 资源拆除移到其他线程。
 - **常见 Fabric 优化组合已做实际 JAR 的无窗口目标转换检查。** 同一矩阵包含 Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.4、BadOptimizations 2.4.1、Particle Core 0.3.3、RRLS 5.2.8、Sodium 0.9.2 和 ViaFabricPlus 5.0.1；额外组合覆盖 Bobby 5.2.15、Distant Horizons 3.2.0-b、FastQuit 3.1.5 与 Reese's Sodium Options 2.2.3。26.x 平台目标通过 `verifyCompatibility` 用各自版本的 JAR 做同类检查（NeoForge 26.1.2 含 ModernFix 5.27.22）。这只能证明这些精确版本加载时 NoLoadingScreen 钩子成功保留，不能替代 GPU 或玩法测试。源码对照发现的两处冲突已在本 Mod 侧修复：本地破坏碎屑改在 `LevelExtractor` 的调用点追加而不是在 `ParticleEngine.extract` 内部（BadOptimizations 会在粒子表为空时提前返回）；`disconnect` 中若保存/KickWarn 场景即将保留旧世界，则在 HUD 重置后、原版写 `null` 之前先把 `Minecraft.level` 置空（ModernFix 会在原版写 `null` 处清空该世界的区块与光照引擎）。除 Sodium 的精确私有优化外，生产代码优先通过可串联的原版目标与生命周期兼容，不引入脆弱的第三方私有 API 依赖。
 - ⚠️ **占位世界期间，别的模组在渲染钩子里看到的是那个假世界。** 绑定只发生在一帧渲染之内，
   所以 tick 事件、数据包处理里它们看到的仍是原版的 `null`；但如果某个模组在渲染回调里对

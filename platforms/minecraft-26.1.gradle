@@ -1,0 +1,15 @@
+// One release per loader; other game versions are runtime verification environments only.
+ext.minecraftFamily = '26.1.x'
+ext.minecraftVersion = providers.gradleProperty('testMinecraftVersion').getOrElse('26.1')
+ext.apiSourceRoot = '../minecraft-26.1/src'
+ext.minecraftVersionRange = '[26.1,26.1.2]'
+ext.fabricMinecraftRange = '>=26.1 <=26.1.2'
+def releases = ['26.1', '26.1.1', '26.1.2']
+if (!releases.contains(minecraftVersion)) throw new GradleException("Unsupported verification version: ${minecraftVersion}")
+if (providers.gradleProperty('testMinecraftVersion').isPresent()) {
+    if (!providers.gradleProperty('verificationJar').isPresent())
+        throw new GradleException('Runtime verification requires -PverificationJar=<existing release jar>; it never recompiles the mod')
+    layout.buildDirectory = layout.projectDirectory.dir("build/verification/${minecraftVersion}")
+} else if (providers.gradleProperty('verificationJar').isPresent()) {
+    throw new GradleException('Specify -PtestMinecraftVersion together with -PverificationJar')
+}

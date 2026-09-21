@@ -1,0 +1,77 @@
+// Verify an existing distributable, never a second compilation of the production sources.
+def supplied = providers.gradleProperty('verificationJar').orNull
+if (supplied == null) return
+if (!project.ext.has('minecraftFamily')) throw new GradleException('External-jar verification requires an API-family build')
+def release = file(supplied).canonicalFile
+if (!release.isFile() || !release.name.endsWith('.jar')) throw new GradleException("Missing release jar: ${release}")
+ext.verificationArtifact = release
+tasks.named('compileRepairSmokeJava', JavaCompile) {
+    source new File(repositoryRoot, 'platforms/modern-common/src/test/java/io/github/bingkkni/noloadingscreen/verification/ReleaseArtifactVerification.java')
+}
+
+// Every test/smoke/launcher classpath and loader's MOD_CLASSES/classPathGroups now sees the JAR.
+// Keep fixture compilation, but neither compile nor package any production class in this mode.
+sourceSets.main.output.classesDirs.setFrom(files(release))
+sourceSets.main.output.resourcesDir = null
+['compileJava', 'processResources', 'jar', 'sourcesJar'].each { name ->
+    tasks.named(name) { enabled = false }
+}
+def verifyInput = tasks.register('verifyReleaseInput') {
+    group = 'verification'
+    inputs.file release
+    doLast {
+        def expected = "NoLoadingScreen-${project.version}-${loaderName}-${minecraftFamily}.jar"
+        if (release.name != expected) throw new GradleException("Expected ${expected}, got ${release.name}")
+        def sha = java.security.MessageDigest.getInstance('SHA-256').digest(release.bytes).encodeHex()
+        logger.lifecycle("Release runtime input: ${release.name} SHA256=${sha}; Minecraft ${minecraftVersion}")
+    }
+}
+tasks.withType(JavaExec).configureEach {
+    if (name in ['verifyClient', 'verifyCompatibility', 'verifyRepairGpu']) {
+        dependsOn verifyInput
+        systemProperty 'nls.verify.artifact', release.absolutePath
+        systemProperty 'nls.verify.minecraft', minecraftVersion
+    }
+}
+
+if (loaderName == 'Forge') {
+    // Forge discovers the unchanged release alongside a separate fixture-only mod.
+    ['compileTestJava', 'compileRepairSmokeJava'].each { name ->
+        tasks.named(name, JavaCompile) {
+            source new File(repositoryRoot, 'platforms/forge-modern/src/verification/java')
+        }
+    }
+    def fixtureMetadata = layout.buildDirectory.dir('generated/verificationMetadata')
+    def generateMetadata = tasks.register('generateVerificationMetadata') {
+        inputs.file release
+        outputs.dir fixtureMetadata
+        doLast {
+            def metadata = fixtureMetadata.get().file('META-INF/mods.toml').asFile
+            metadata.parentFile.mkdirs()
+            metadata.text = '''modLoader="javafml"
+loaderVersion="[62,)"
+license="MIT"
+[[mods]]
+modId="nls_verification"
+version="1.0.0"
+'''
+            new java.util.zip.ZipFile(release).withCloseable { zip ->
+                zip.getInputStream(zip.getEntry('pack.mcmeta')).withCloseable { input ->
+                    fixtureMetadata.get().file('pack.mcmeta').asFile.bytes = input.readAllBytes()
+                }
+            }
+        }
+    }
+    tasks.withType(Jar).configureEach {
+        if (name in ['clientVerificationJar', 'repairSmokeJar']) {
+            dependsOn generateMetadata
+            exclude release.name
+            from(generateMetadata)
+        }
+    }
+    tasks.withType(JavaExec).configureEach {
+        if (name == 'verifyClient') {
+            doFirst { project.copy { from release; into new File(workingDir, 'mods') } }
+        }
+    }
+}

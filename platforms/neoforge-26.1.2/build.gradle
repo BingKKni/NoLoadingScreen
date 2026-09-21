@@ -1,6 +1,0 @@
-plugins { id 'net.neoforged.moddev' version '2.0.147' }
-ext.minecraftVersion = '26.1.2'
-ext.neoForgeVersion = '26.1.2.109'
-ext.upperNeoForgeVersion = '26.2'
-ext.apiSourceRoot = '../minecraft-26.1/src'
-apply from: '../neoforge-modern.gradle'

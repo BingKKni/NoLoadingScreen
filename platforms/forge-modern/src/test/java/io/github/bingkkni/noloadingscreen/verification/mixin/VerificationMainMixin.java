@@ -1,6 +1,6 @@
 package io.github.bingkkni.noloadingscreen.verification.mixin;
 
-import io.github.bingkkni.noloadingscreen.ForgeClientVerification;
+import io.github.bingkkni.noloadingscreen.verification.ForgeClientVerification;
 import net.minecraft.client.main.Main;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;

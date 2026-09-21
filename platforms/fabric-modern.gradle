@@ -5,8 +5,9 @@ if (!project.ext.has('modMenuVersion')) ext.modMenuVersion = '18.0.1'
 // An API family may list shared files it has no counterpart for (an accessor to a field that no
 // longer exists, for example); the family's own files still win by relative path as usual.
 if (!project.ext.has('sharedExcludes')) ext.sharedExcludes = []
-ext.sourceLayers = [fileTree('src/main/java'), fileTree('../fabric-modern/src/main/java'),
-    fileTree(apiSourceRoot + '/main/java'), fileTree('../../src/main/java') { exclude sharedExcludes }]
+// The API family's Sodium policy precedes the unverified-family fallback.
+ext.sourceLayers = [fileTree('src/main/java'), fileTree(apiSourceRoot + '/main/java'),
+    fileTree('../fabric-modern/src/main/java'), fileTree('../../src/main/java') { exclude sharedExcludes }]
 apply from: '../modern-common.gradle'
 repositories {
     maven { url = 'https://maven.terraformersmc.com/releases/' }
@@ -17,9 +18,10 @@ dependencies {
     compileOnly "com.terraformersmc:modmenu:${modMenuVersion}"
 }
 processResources {
-    inputs.properties([version: project.version, minecraftVersion: minecraftVersion])
+    def supportedMinecraft = project.findProperty('fabricMinecraftRange') ?: "=${minecraftVersion}"
+    inputs.properties([version: project.version, minecraftVersion: supportedMinecraft])
     from('../../src/main/resources/fabric.mod.json') {
-        expand version: project.version, minecraftVersion: "=${minecraftVersion}"
+        expand version: project.version, minecraftVersion: supportedMinecraft
     }
     from(apiSourceRoot + '/main/resources/noloadingscreen.mixins.json')
 }

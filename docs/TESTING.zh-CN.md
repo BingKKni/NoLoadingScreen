@@ -2,7 +2,29 @@
 
 > NeoForge 1.21.10/.11 的独立构建、CLIENT 转换/行为检查、可选模组矩阵及 GPU 冒烟命令见 [NEOFORGE.md](NEOFORGE.md)。下文保留原 Fabric 26.2 证据与实机清单。
 
-适用版本：Minecraft 26.2、Fabric Loader 0.19.3 或更高、Java 25。当前版本：1.1.0。
+本页包含 Minecraft 26.1.x、26.2、26.3 与 NeoForge 1.21.10/1.21.11 的验证记录；26.x 使用 Java 25，1.21.x 使用 Java 21。当前版本：1.1.0。
+
+## 26.1.x 同一 JAR 跨版本验收
+
+26.1、26.1.1、26.1.2 现在每个加载器只发布一份 `26.1.x` JAR。以 26.1 编译一次后，用 `-PtestMinecraftVersion=<游戏版本> -PverificationJar=<已有 JAR>` 运行测试，生产代码编译、资源处理和打包均禁用。测试断言实际 Minecraft 版本、引擎代码来源及加载文件与输入文件逐字节相同，并输出 SHA-256。构建与复现命令见 [VERSIONS.md](VERSIONS.md)。
+
+本轮本地实测结果（并非沿用旧分版本 JAR 的结果）：
+
+| 加载器 | 无优化模组 `check` | `verifyCompatibility` | 同一 JAR 的 `verifyRepairGpu` |
+|---|---|---|---|
+| Fabric | 三个版本全部通过 | 三个版本均通过 Sodium + 对应优化组合 | 三个版本均装载对应 Sodium，通过 |
+| NeoForge | 三个版本全部通过 | 26.1/26.1.1 装载 Sodium；26.1.2 装载 Sodium + 优化组合，通过 | 三个版本均装载对应 Sodium，通过 |
+| Forge | 三个版本全部通过 | 没有官方 Sodium Forge 包，不套用其私有布局 | 三个版本无 Sodium，通过 |
+
+Sodium 精确版本：26.1/26.1.1 使用 `0.8.9+mc26.1.1`，26.1.2 使用 `0.9.2+mc26.1.2`。Fabric 26.1/26.1.1 组合包含 Fabric API、Lithium、FerriteCore、BadOptimizations、Dynamic FPS、Sodium Extra 及其配置依赖；26.1.2 另覆盖 Iris、ImmediatelyFast、EntityCulling、MoreCulling、Particle Core。NeoForge 26.1.2 组合覆盖 Iris、ImmediatelyFast、Lithium、FerriteCore、EntityCulling、MoreCulling、BadOptimizations、Dynamic FPS、Sodium Extra、ModernFix 及配置依赖。使用的是本地已有的原始第三方 JAR，没有重打包或关闭本 Mod 功能。
+
+GPU 回归在 NVIDIA RTX 4060 Laptop 上运行，覆盖实际保存等待的输入、KickWarn、本地交互、物品栏、换手和 FOV；没有打开用户存档或连接服务器，不代表完整整合包、着色器场景或实际多人切服验收。日志保存在 `build/family-verification/`；各环境工作目录为 `platforms/<loader>-26.1/build/verification/<game>/`。已验证产物 SHA-256：
+
+- Fabric：`967a9671c93903a67164e554fa58d08514bd10b5308537f1711b1dc07f7f7d1c`
+- NeoForge：`351f7d6f837340e64cd6dd9be26e33830c75a4b7309997460c711a539927f961`
+- Forge：`199acd58b22931660c684c34eb51a6458ffc82c9fe5d5e2d43458f9ba6b35cbd`
+
+本轮额外调整仅涉及测试设施：Forge 的独立测试伴随 Mod 避免 Java 模块分包冲突；光照队列的无构造器夹具补齐空实体存储与 Fabric 生命周期的已加载区块集合，使真实 Fabric API 卸载回调可以执行。生产引擎没有因此修改。
 
 ## 接管旧世界的延迟光照队列回归
 

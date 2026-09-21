@@ -1,5 +1,5 @@
 modLoader="javafml"
-loaderVersion="[${forgeMajor},)"
+loaderVersion="${forgeLoaderRange}"
 license="MIT"
 issueTrackerURL="https://github.com/BingKKni/NoLoadingScreen/issues"
 clientSideOnly=true
@@ -16,13 +16,13 @@ description='''Replaces loading screens with a world view or a free camera while
 [[dependencies.noloadingscreen]]
 modId="forge"
 mandatory=true
-versionRange="[${forgeVersion},${forgeMajor.toInteger() + 1})"
+versionRange="${forgeVersionRange}"
 ordering="NONE"
 side="CLIENT"
 
 [[dependencies.noloadingscreen]]
 modId="minecraft"
 mandatory=true
-versionRange="[${minecraftVersion}]"
+versionRange="${minecraftVersionRange}"
 ordering="NONE"
 side="CLIENT"

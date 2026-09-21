@@ -18,7 +18,7 @@ tasks.withType(JavaExec).configureEach {
 }
 tasks.withType(Jar).configureEach {
     archiveBaseName = 'NoLoadingScreen'
-    archiveVersion = "${project.version}-${loaderName}-${minecraftVersion}"
+    archiveVersion = "${project.version}-${loaderName}-${project.findProperty('minecraftFamily') ?: minecraftVersion}"
 }
 
 // Highest-priority API/loader layer wins by relative path, without rewriting Java sources.
@@ -66,3 +66,4 @@ ext.artifactMixins = [Fabric: 'noloadingscreen.mixins.json', NeoForge: 'noloadin
 apply from: '../../gradle/verify-modern-artifact.gradle'
 ext.repairSmokeLayers = [file(apiSourceRoot + '/repairSmoke/java'), file('../../src/repairSmoke/java')]
 apply from: '../../gradle/repair-gpu.gradle'
+apply from: '../../gradle/verify-release-runtime.gradle'

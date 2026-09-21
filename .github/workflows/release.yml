@@ -41,8 +41,15 @@ jobs:
         env:
           MOD_VERSION: ${{ needs.version.outputs.value }}
         run: |
-          count=$(find release-artifacts -maxdepth 1 -name "NoLoadingScreen-${MOD_VERSION}-*.jar" | wc -l)
-          test "$count" -eq 30
+          targets=(Fabric-26.1.x NeoForge-26.1.x Forge-26.1.x
+                   Fabric-26.2 NeoForge-26.2 Forge-26.2 Fabric-26.3
+                   NeoForge-1.21.10 NeoForge-1.21.11)
+          for target in "${targets[@]}"; do
+            test -f "release-artifacts/NoLoadingScreen-${MOD_VERSION}-${target}.jar"
+            test -f "release-artifacts/NoLoadingScreen-${MOD_VERSION}-${target}-sources.jar"
+          done
+          count=$(find release-artifacts -maxdepth 1 -name '*.jar' | wc -l)
+          test "$count" -eq 18
 
       - name: publish release
         uses: softprops/action-gh-release@v3

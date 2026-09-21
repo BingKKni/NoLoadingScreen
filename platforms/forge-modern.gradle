@@ -56,8 +56,11 @@ def generateForgeMixins = tasks.register('generateForgeMixins') {
     }
 }
 processResources {
-    def metadata = [version: project.version, minecraftVersion: minecraftVersion,
-        forgeVersion: forgeVersion, forgeMajor: forgeVersion.tokenize('.')[0]]
+    def major = forgeVersion.tokenize('.')[0].toInteger()
+    def metadata = [version: project.version,
+        minecraftVersionRange: project.findProperty('minecraftVersionRange') ?: "[${minecraftVersion}]",
+        forgeVersionRange: project.findProperty('forgeVersionRange') ?: "[${forgeVersion},${major + 1})",
+        forgeLoaderRange: project.findProperty('forgeLoaderRange') ?: "[${major},)"]
     inputs.properties metadata
     filesMatching('META-INF/mods.toml') { expand metadata }
     from(generateForgeMixins)

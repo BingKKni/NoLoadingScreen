@@ -4,7 +4,7 @@ tasks.register('verifyModernArtifact') {
     description = 'Check release metadata, shared icon, Java level and test/loader isolation.'
     dependsOn jar
     doLast {
-        def artifact = tasks.named('jar').get().archiveFile.get().asFile
+        def artifact = project.findProperty('verificationArtifact') ?: tasks.named('jar').get().archiveFile.get().asFile
         def iconPath = 'assets/noloadingscreen/icon.png'
         // Callers supply the repository root, independent of standalone project location.
         def sourceIcon = new File(repositoryRoot, 'src/main/resources/' + iconPath)
@@ -19,6 +19,20 @@ tasks.register('verifyModernArtifact') {
             def metadata = new String(readBytes(artifactMetadata), java.nio.charset.StandardCharsets.UTF_8)
             if (!metadata.contains(iconPath) || !metadata.contains(project.version.toString()) || metadata.contains('${'))
                 throw new GradleException('Metadata has a missing icon/version or unexpanded placeholder')
+            if (project.ext.has('minecraftFamily')) {
+                if (artifactMetadata == 'fabric.mod.json') {
+                    def dependency = new groovy.json.JsonSlurper().parseText(metadata).depends.minecraft
+                    if (dependency != fabricMinecraftRange) throw new GradleException('Incorrect Fabric Minecraft family range')
+                } else {
+                    if (!metadata.contains('versionRange="' + minecraftVersionRange + '"'))
+                        throw new GradleException('Incorrect FML Minecraft family range')
+                    def loaderRange = loaderName == 'NeoForge' ? neoForgeVersionRange : forgeVersionRange
+                    if (!metadata.contains('versionRange="' + loaderRange + '"'))
+                        throw new GradleException('Incorrect FML loader family range')
+                }
+                if (artifact.name != "NoLoadingScreen-${project.version}-${loaderName}-${minecraftFamily}.jar")
+                    throw new GradleException('Incorrect Minecraft family artifact name')
+            }
             def mixins = new groovy.json.JsonSlurper().parse(readBytes(artifactMixins))
             def expectedMixinLevel = artifactMetadata == 'META-INF/mods.toml' ? 'JAVA_21' : 'JAVA_25'
             if (mixins.compatibilityLevel != expectedMixinLevel || mixins.injectors.defaultRequire != 1)

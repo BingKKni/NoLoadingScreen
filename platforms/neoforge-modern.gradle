@@ -21,8 +21,9 @@ sourceSets.main.resources.srcDir '../neoforge-common/src/main/resources'
 // Select the API-family hook inventory; mapped 1.21 hooks stay in their existing builds.
 sourceSets.main.resources.exclude 'noloadingscreen.neoforge.mixins.json'
 processResources {
-    def metadata = [version: project.version, minecraftVersion: minecraftVersion, neoForgeVersion: neoForgeVersion,
-        nextNeoForgeFamily: upperNeoForgeVersion]
+    def metadata = [version: project.version,
+        minecraftVersionRange: project.findProperty('minecraftVersionRange') ?: "[${minecraftVersion}]",
+        neoForgeVersionRange: project.findProperty('neoForgeVersionRange') ?: "[${neoForgeVersion},${upperNeoForgeVersion})"]
     inputs.properties metadata
     filesMatching('META-INF/neoforge.mods.toml') { expand metadata }
     from(apiSourceRoot + '/main/resources/noloadingscreen.mixins.json') {
@@ -44,6 +45,7 @@ def registerClientVerification(String name, String directory) {
         classpath = sourceSets.launcher.runtimeClasspath
         mainClass = 'io.github.bingkkni.noloadingscreen.launch.ClientVerificationLauncher'
         jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED', '--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming'
+        systemProperty 'nls.verify.main', 'io.github.bingkkni.noloadingscreen.verification.ClientVerification'
         systemProperty 'java.awt.headless', 'true'
         systemProperty 'file.encoding', 'UTF-8'
         workingDir layout.buildDirectory.dir(directory)

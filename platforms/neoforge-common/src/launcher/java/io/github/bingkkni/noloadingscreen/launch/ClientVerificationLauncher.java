@@ -23,7 +23,7 @@ public final class ClientVerificationLauncher {
 					Class.forName("net.minecraft.client.main.Main", true, loader.getCurrentClassLoader())
 						.getMethod("main", String[].class).invoke(null, (Object) args);
 				} else {
-					Class.forName("io.github.bingkkni.noloadingscreen.ClientVerification", true, loader.getCurrentClassLoader())
+					Class.forName(System.getProperty("nls.verify.main", "io.github.bingkkni.noloadingscreen.ClientVerification"), true, loader.getCurrentClassLoader())
 						.getMethod("run").invoke(null);
 				}
 			} catch (InvocationTargetException failure) { throw failure.getCause(); }
