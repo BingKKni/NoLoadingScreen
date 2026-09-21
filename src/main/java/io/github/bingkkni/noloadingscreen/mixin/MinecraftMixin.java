@@ -1,15 +1,12 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
+import io.github.bingkkni.noloadingscreen.platform.FrameSurface;
 import io.github.bingkkni.noloadingscreen.platform.LoaderServices;
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import com.mojang.authlib.yggdrasil.ProfileResult;
-import com.mojang.blaze3d.systems.GpuDevice;
-import com.mojang.blaze3d.systems.GpuSurface;
-import com.mojang.blaze3d.systems.RenderSystem;
 import io.github.bingkkni.noloadingscreen.DisconnectedWorldView;
 import io.github.bingkkni.noloadingscreen.LocalSkinPreloader;
 import io.github.bingkkni.noloadingscreen.JoinClassWarmup;
@@ -26,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import net.minecraft.client.gui.Gui;
+import net.minecraft.client.gui.Hud;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.network.Connection;
 import net.minecraft.client.gui.screens.LevelLoadingScreen;
@@ -67,7 +65,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(Minecraft.class)
 public abstract class MinecraftMixin {
-	@Shadow @Final private CompletableFuture<@Nullable ProfileResult> profileFuture;
+	/** The launcher profile result type moved packages between API families; see ProfileLookup. */
+	@Shadow @Final private CompletableFuture<?> profileFuture;
 	@Shadow private @Nullable Connection pendingConnection;
 	@Unique private boolean nls$drainingTasks;
 	@Unique private long nls$taskStart;
@@ -204,6 +203,8 @@ public abstract class MinecraftMixin {
 	 * throw while the placeholder is up no longer takes the game with it. This is a cosmetic feature
 	 * standing in front of a join; the worst it should ever be able to do is put the vanilla loading
 	 * screen back. The exception is logged in full, and only swallowed for frames this mod changed.
+	 * The swapchain image is then handed back by {@link FrameSurface}, without which the window
+	 * would stay frozen on its last image for the rest of the session.
 	 */
 	@WrapMethod(method = "renderFrame")
 	private void nls$renderFrame(final boolean advanceGameTime, final Operation<Void> original) {
@@ -215,53 +216,12 @@ public abstract class MinecraftMixin {
 		} catch (Throwable t) {
 			if (!bound) throw t;
 			PlaceholderWorld.onRenderFailed(t);
-			if (!nls$handBackSurface()) {
+			if (!FrameSurface.handBack(Minecraft.getInstance())) {
 				throw t;
 			}
 		} finally {
 			if (bound) PlaceholderWorld.unbind();
 			LoadingWork.endTiming("render frame", timing);
-		}
-	}
-
-	/**
-	 * Puts the swapchain image back after a frame this mod swallowed.
-	 *
-	 * <p>{@code renderFrame} acquires a surface image near its start and hands it back with
-	 * {@code present()} at the very end. An exception in between skips that, and the first thing the
-	 * <em>next</em> {@code renderFrame} does is
-	 *
-	 * <pre>if (this.windowSurface.isAcquired()) return;</pre>
-	 *
-	 * <p>So swallowing a frame without this leaves the window frozen on its last image for the rest
-	 * of the session — the game keeps running, the log looks healthy, and quitting ends with
-	 * {@code Shutdown failure! java.lang.IllegalStateException: Cannot close a surface while it is
-	 * acquired}. That is very much worse than the loading screen this mod set out to remove, and it
-	 * is what the first version of the safety net actually did on the two failures in the logs.
-	 *
-	 * @return whether the surface was handed back, i.e. whether swallowing the frame is survivable.
-	 */
-	private static boolean nls$handBackSurface() {
-		Minecraft minecraft = Minecraft.getInstance();
-		GpuSurface surface = minecraft.windowSurface();
-		if (!surface.isAcquired()) {
-			return true;
-		}
-
-		try {
-			// Vanilla's own tail, minus profiling and frame capture. The blit is not optional:
-			// present() refuses to run without one.
-			GpuDevice device = RenderSystem.getDevice();
-			surface.blitFromTexture(
-				device.createCommandEncoder(),
-				minecraft.gameRenderer.mainRenderTarget().getColorTextureView()
-			);
-			device.createCommandEncoder().submit();
-			surface.present();
-			return true;
-		} catch (Throwable t) {
-			NoLoadingScreen.LOGGER.error("Could not hand the window surface back after a failed frame", t);
-			return false;
 		}
 	}
 
@@ -363,12 +323,12 @@ public abstract class MinecraftMixin {
 	@Inject(method = "clearClientLevel", at = @At("HEAD"))
 	private void nls$clearLevelStart(final Screen screen, final CallbackInfo ci) {
 		NoLoadingScreen.onLevelTornDown();
-		NoLoadingScreen.markTimeline("开始拆除旧世界 (clearClientLevel)");
+		NoLoadingScreen.markTimeline("Client world teardown started");
 	}
 
 	@Inject(method = "clearClientLevel", at = @At("RETURN"))
 	private void nls$clearLevelEnd(final Screen screen, final CallbackInfo ci) {
-		NoLoadingScreen.markTimeline("旧世界拆除完毕 <- 这段是客户端自己的开销");
+		NoLoadingScreen.markTimeline("Client world teardown completed");
 	}
 
 	@WrapMethod(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V")
@@ -392,6 +352,20 @@ public abstract class MinecraftMixin {
 	)
 	private void nls$showSavingWorld(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final CallbackInfo ci) {
 		SavingWorldView.install();
+	}
+
+	/**
+	 * A captured scene is shown a few statements after vanilla writes null over this field. Other
+	 * mods scrub whatever level they still find there at that write (ModernFix's world-leak
+	 * mitigation nulls its chunk storage and light engine), which would remove the floor and the
+	 * lighting from the scene about to go up. The HUD reset is the last vanilla reader before that
+	 * write, so the field is detached right after it; the retained level is released by the scene.
+	 */
+	@WrapOperation(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/Hud;onDisconnected()V"))
+	private void nls$detachRetainedScene(final Hud hud, final Operation<Void> original) {
+		original.call(hud);
+		if (SavingWorldView.pending() || DisconnectedWorldView.active()) ((Minecraft) (Object) this).level = null;
 	}
 
 	@Redirect(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
@@ -432,11 +406,11 @@ public abstract class MinecraftMixin {
 	private void nls$setLevelStart(final ClientLevel level, final CallbackInfo ci) {
 		// Hand the render engines back before vanilla points them at the real world.
 		NoLoadingScreen.onLevelTornDown();
-		NoLoadingScreen.markTimeline("开始装配新世界 (setLevel；此前也可能包含客户端拆除和登录处理)");
+		NoLoadingScreen.markTimeline("Client world assembly started");
 	}
 
 	@Inject(method = "setLevel", at = @At("RETURN"))
 	private void nls$setLevelEnd(final ClientLevel level, final CallbackInfo ci) {
-		NoLoadingScreen.markTimeline("新世界装配完毕 <- 这段是客户端自己的开销");
+		NoLoadingScreen.markTimeline("Client world assembly completed");
 	}
 }

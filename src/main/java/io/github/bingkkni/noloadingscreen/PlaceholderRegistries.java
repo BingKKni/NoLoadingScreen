@@ -10,9 +10,6 @@ import net.minecraft.core.RegistrationInfo;
 import net.minecraft.tags.TagLoader;
 import net.minecraft.core.registries.BuiltInRegistries;
 import io.github.bingkkni.noloadingscreen.platform.RegistryLoader;
-import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.repository.ServerPacksSource;
-import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import io.github.bingkkni.noloadingscreen.platform.ClientRuntime;
 import org.jspecify.annotations.Nullable;
 
@@ -48,7 +45,7 @@ public final class PlaceholderRegistries {
 	static RegistryAccess.Frozen load() {
 		RegistryAccess.Frozen builtins = new RegistryAccess.ImmutableRegistryAccess(BuiltInRegistries.REGISTRY.stream()
 			.map(PlaceholderRegistries::copyRegistry).toList()).freeze();
-		try (var resources = new MultiPackResourceManager(PackType.SERVER_DATA, List.of(ServerPacksSource.createVanillaPackSource()))) {
+		try (var resources = RegistryLoader.vanillaData()) {
 			// Dynamic codecs reference static block/item tags even on the title screen. Apply
 			// vanilla tags ONLY to private holders, never to the real client's global registries.
 			TagLoader.loadTagsForExistingRegistries(resources, builtins).forEach(Registry.PendingTags::apply);

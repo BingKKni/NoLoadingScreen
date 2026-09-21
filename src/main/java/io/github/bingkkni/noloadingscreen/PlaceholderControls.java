@@ -60,4 +60,8 @@ public final class PlaceholderControls {
 	public boolean sprinting() { return this.sprinting; }
 	public boolean flying() { return this.flying; }
 	public void stopSprinting() { this.sprinting = false; }
+	public void setFlying(final boolean flying) { this.flying = flying; this.flightTicks = 0; }
+	public void restrictFlight(final boolean mayfly) {
+		if (!mayfly) setFlying(false);
+	}
 }

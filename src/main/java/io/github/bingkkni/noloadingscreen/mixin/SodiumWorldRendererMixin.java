@@ -1,7 +1,5 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
-import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import io.github.bingkkni.noloadingscreen.LoadingWork;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig;
 import net.minecraft.client.Minecraft;
@@ -21,11 +19,18 @@ public abstract class SodiumWorldRendererMixin {
 	@Shadow private int renderDistance;
 	@Unique private boolean nls$freshRenderer;
 	@Unique private long nls$resourceGeneration;
+	@Unique private long nls$initializationTiming;
 
-	@WrapMethod(method = "initRenderer")
-	private void nls$measureRendererInitialization(final Operation<Void> original) {
-		long timing = LoadingWork.startTiming();
-		try { original.call(); } finally { LoadingWork.endTiming("Sodium renderer initialization", timing); }
+	// HEAD/RETURN rather than a method wrap: initRenderer takes a command list on some verified
+	// builds and nothing on others, and a wrap must repeat the exact parameter list.
+	@Inject(method = "initRenderer", at = @At("HEAD"))
+	private void nls$measureRendererInitialization(final CallbackInfo ci) {
+		this.nls$initializationTiming = LoadingWork.startTiming();
+	}
+
+	@Inject(method = "initRenderer", at = @At("RETURN"))
+	private void nls$rendererInitialized(final CallbackInfo ci) {
+		LoadingWork.endTiming("Sodium renderer initialization", this.nls$initializationTiming);
 	}
 
 	@Inject(method = "loadLevel", at = @At("RETURN"))

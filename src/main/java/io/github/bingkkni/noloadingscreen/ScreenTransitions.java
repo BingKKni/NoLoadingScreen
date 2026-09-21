@@ -18,6 +18,7 @@ public final class ScreenTransitions {
 		boolean hideDisconnected = DisconnectedWorldView.hides(screen);
 		boolean hideLoading = NoLoadingScreenConfig.get().enabled && screen instanceof LevelLoadingScreen && PlaceholderWorld.active();
 		if (hideLoading && (ClientUi.screen(Minecraft.getInstance()) instanceof LoadingInventoryScreen
+			|| ClientUi.screen(Minecraft.getInstance()) instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen
 			|| ClientUi.screen(Minecraft.getInstance()) instanceof LoadingPauseScreen || ClientUi.screen(Minecraft.getInstance()) instanceof ChatScreen)) {
 			return; // a phase change must not close/reinitialize the player's local menu either
 		}
@@ -35,9 +36,9 @@ public final class ScreenTransitions {
 	public static Screen intercept(Screen screen) {
 		NoLoadingScreen.onScreenChanging(screen);
 		if (screen instanceof LevelLoadingScreen) {
-			NoLoadingScreen.markTimeline("地形加载界面出现 (加载地形中...)");
+			NoLoadingScreen.markTimeline("Terrain screen requested");
 		} else if (screen == null && NoLoadingScreen.timelineActive()) {
-			NoLoadingScreen.markTimeline("加载界面关闭，画面交还给玩家");
+			NoLoadingScreen.markTimeline("Loading screen closed");
 		}
 
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
@@ -46,7 +47,7 @@ public final class ScreenTransitions {
 			// is no ClientLevel, and setScreen(null) would answer that with the title screen — the
 			// placeholder world covers that window instead, and drops its own screen from install().
 			if (Minecraft.getInstance().level != null) {
-				NoLoadingScreen.markTimeline("NoLoadingScreen 隐藏了地形加载界面，直接交还画面");
+				NoLoadingScreen.markTimeline("Terrain screen suppressed");
 				return null;
 			}
 		}

@@ -1,5 +1,6 @@
 package io.github.bingkkni.noloadingscreen;
 
+import io.github.bingkkni.noloadingscreen.platform.ClientReadiness;
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import io.github.bingkkni.noloadingscreen.platform.LevelAccess;
 import io.github.bingkkni.noloadingscreen.gui.LoadingHud;
@@ -11,7 +12,6 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.Gui;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConnectScreen;
@@ -28,7 +28,6 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import io.github.bingkkni.noloadingscreen.platform.ClientRuntime;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
@@ -72,12 +71,14 @@ public final class NoLoadingScreen {
 
 	/** Matches vanilla's own {@code CLIENT_WAIT_TIMEOUT_MS}: after this the overlay goes away
 	 *  whatever happened, so a stuck load cannot leave permanent decoration on screen. */
-	private static final long OVERLAY_TIMEOUT_MS = 30_000L;
+	private static long multiplayerStartMs = -1L;
+	private static String lastConnectionStatus = "";
 	/** The tracker whose progress the HUD overlay is showing, or null when nothing is loading. */
 	private static @Nullable LevelLoadTracker overlayTracker;
 	/** Separate from {@link #loadStartMs}, which is cleared the moment the gate opens. */
 	private static long overlayStartMs = -1L;
 	private static boolean levelReadySeen;
+	private static long clientReadyAtMs = -1L;
 
 	// --- Phase tracking ------------------------------------------------------------------------
 	// One line per join in the log, and a line of text on screen. Both exist because "it hung" is
@@ -88,8 +89,6 @@ public final class NoLoadingScreen {
 	private static long phaseStartMs = -1L;
 	private static long joinStartMs = -1L;
 	private static final List<PhaseTime> phaseLog = new ArrayList<>();
-	/** Kept after {@link #finishPhases()} has cleared the live list, for the chat summary. */
-	private static final List<PhaseTime> lastJoinPhases = new ArrayList<>();
 
 	private record PhaseTime(JoinPhase phase, long ms) {
 	}
@@ -118,10 +117,6 @@ public final class NoLoadingScreen {
 		return phase;
 	}
 
-	public static long phaseElapsedMs() {
-		return phaseStartMs < 0L ? 0L : ClientRuntime.millis() - phaseStartMs;
-	}
-
 	private static void enterPhase(final JoinPhase next) {
 		if (phase == next || !NoLoadingScreenConfig.get().enabled) {
 			// With the mod off nothing is tracked and nothing is logged, so "disabled" really does
@@ -140,7 +135,7 @@ public final class NoLoadingScreen {
 
 		phase = next;
 		phaseStartMs = now;
-		markTimeline("阶段 -> " + next.name());
+		markTimeline("Loading phase: " + next.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
 	}
 
 	/** @return how long the whole join took, or -1 when no join was being tracked. */
@@ -148,7 +143,6 @@ public final class NoLoadingScreen {
 		if (joinStartMs < 0L) {
 			// Nothing was tracked, so whatever is still in there belongs to an earlier join and must
 			// not be reported against this one.
-			lastJoinPhases.clear();
 			return -1L;
 		}
 
@@ -157,14 +151,9 @@ public final class NoLoadingScreen {
 			phaseLog.add(new PhaseTime(phase, now - phaseStartMs));
 		}
 		long total = now - joinStartMs;
-		LOGGER.info(
-			"Join finished in {} ms [{}]",
-			total,
-			phaseLog.stream().map(p -> p.phase().name().toLowerCase() + " " + p.ms() + "ms").collect(Collectors.joining(", "))
-		);
-
-		lastJoinPhases.clear();
-		lastJoinPhases.addAll(phaseLog);
+		for (PhaseTime entry : phaseLog) LOGGER.info("{} took {}ms.",
+			entry.phase().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '), entry.ms());
+		LOGGER.info("Total loading time: {}ms.", total);
 
 		phase = JoinPhase.NONE;
 		phaseStartMs = -1L;
@@ -242,12 +231,12 @@ public final class NoLoadingScreen {
 		levelReadySeen = false;
 		LoadingHud.resetSmoothing();
 		if (PlaceholderWorld.active()) {
-			markTimeline("沿用准备资源阶段的占位世界，保留镜头与本地操作");
+			markTimeline("Early placeholder retained");
 			return;
 		}
 
 		if (PlaceholderWorld.synthesise(registries, null, null, null, new Vec3(0.5, 80.0, 0.5), 0.0F, 0.0F)) {
-			markTimeline("NoLoadingScreen 装上占位世界，玩家可以自由转视角");
+			markTimeline("Placeholder installed");
 		}
 	}
 
@@ -259,7 +248,8 @@ public final class NoLoadingScreen {
 	 * level and player still exist, so it is where the camera state is taken.
 	 */
 	public static void onConfigurationStarting() {
-		beginTimeline("配置阶段开始 (重载配置中...)");
+		beginTimeline("Server configuration started");
+		multiplayerStartMs = ClientRuntime.millis();
 		enterPhase(JoinPhase.CONFIGURING);
 
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
@@ -280,6 +270,14 @@ public final class NoLoadingScreen {
 	 */
 	public static boolean shouldKeepEnginesForAdoption() {
 		return outgoing != null;
+	}
+
+	/** Only a captured outgoing world's actual listener teardown may retire its pending tasks. */
+	public static void retireOutgoingLightQueue(final @Nullable ClientLevel level) {
+		if (level != null && (outgoing != null && outgoing.level() == level
+			|| SavingWorldView.retains(level) || DisconnectedWorldView.retains(level))) {
+			((RetainedLightQueue) level).nls$retireLightQueue();
+		}
 	}
 
 	/**
@@ -304,7 +302,7 @@ public final class NoLoadingScreen {
 			return;
 		}
 
-		markTimeline("NoLoadingScreen 接管即将拆除的旧世界，撤下「重载配置中」界面");
+		markTimeline("Outgoing world retained");
 		// adopt() drops the mounted screen while the placeholder is bound. Keep the original
 		// instance captured above so its configuration connection continues to be ticked after the
 		// screen is gone; reading ClientUi.screen(minecraft) here would always see null.
@@ -335,6 +333,7 @@ public final class NoLoadingScreen {
 		// not go the way it usually does. Dropping it keeps a stale level out of the next teardown.
 		outgoing = null;
 		DisconnectedWorldView.clear();
+		PlaceholderWorld.captureCape();
 		PlaceholderWorld.uninstall();
 	}
 
@@ -370,6 +369,9 @@ public final class NoLoadingScreen {
 
 	/** A real disconnection still cleans up all join state; only KickWarn keeps the local scene. */
 	public static void onDisconnected(final boolean keepPlaceholder) {
+		CapeContinuity.clear();
+		multiplayerStartMs = -1L;
+		lastConnectionStatus = "";
 		ConnectScreen connecting = suppressedConnectScreen;
 		if (connecting != null) abortConnecting(connecting);
 		ServerReconfigScreen screen = suppressedConfigScreen;
@@ -386,11 +388,11 @@ public final class NoLoadingScreen {
 		phaseStartMs = -1L;
 		joinStartMs = -1L;
 		phaseLog.clear();
-		lastJoinPhases.clear();
 		loadStartMs = -1L;
 		gateReleased = false;
 		forcingLoadingPackets = false;
 		levelReadySeen = false;
+		clientReadyAtMs = -1L;
 		timelineStart = -1L;
 		timelineLast = -1L;
 		clearOverlay();
@@ -466,7 +468,24 @@ public final class NoLoadingScreen {
 	public static void tickPlaceholder() {
 		Minecraft minecraft = Minecraft.getInstance();
 		tryResourcePlaceholder();
+		completeJoinWhenReady();
+		checkMultiplayerTimeout();
 		ConnectScreen connecting = suppressedConnectScreen;
+		if (connecting != null) {
+			Component status = ((ConnectScreenAccessor) connecting).nls$status();
+			if (status.getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents text
+				&& !text.getKey().equals(lastConnectionStatus)) {
+				lastConnectionStatus = text.getKey();
+				markTimeline(switch (lastConnectionStatus) {
+					case "connect.connecting" -> "Connecting to server";
+					case "connect.negotiating" -> "Negotiating connection";
+					case "connect.encrypting" -> "Encrypting connection";
+					case "connect.authorizing" -> "Authorizing connection";
+					case "connect.joining" -> "Joining server";
+					default -> "Updating connection";
+				});
+			}
+		}
 		if (connecting != null && minecraft.level == null && ClientUi.screen(minecraft) != connecting) {
 			connecting.tick(); // vanilla retains all login/configuration protocol and kick handling
 		}
@@ -525,13 +544,15 @@ public final class NoLoadingScreen {
 				// prompt can replace it before that tick ever runs. No placeholder starts yet.
 				if (NoLoadingScreenConfig.get().enabled && !((ConnectScreenAccessor) connecting).nls$aborted()) {
 					suppressedConnectScreen = connecting;
+					multiplayerStartMs = ClientRuntime.millis();
+					enterPhase(JoinPhase.CONNECTING);
 				}
 			}
 			return;
 		}
 		// Datapack failures, backup/low-disk warnings and cancellations retain vanilla ownership.
 		if (resourceScreen != null && screen != null && screen != resourceScreen
-			&& !(screen instanceof LevelLoadingScreen || screen instanceof LoadingInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)) {
+			&& !(screen instanceof LevelLoadingScreen || screen instanceof LoadingInventoryScreen || screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)) {
 			onDisconnected();
 			return;
 		}
@@ -579,9 +600,10 @@ public final class NoLoadingScreen {
 		overlayTracker = tracker;
 		overlayStartMs = loadStartMs;
 		levelReadySeen = false;
+		clientReadyAtMs = -1L;
 		LoadingHud.resetSmoothing();
 		enterPhase(JoinPhase.RECEIVING_CHUNKS);
-		markTimeline("等待服务端发送世界数据 (LevelLoadTracker.startClientLoad)");
+		markTimeline("Waiting for world data");
 	}
 
 	/**
@@ -598,8 +620,9 @@ public final class NoLoadingScreen {
 		}
 
 		Minecraft minecraft = Minecraft.getInstance();
+		CapeContinuity.restore(minecraft.player, false);
 		if (minecraft.level != null && ClientUi.screen(minecraft) instanceof LevelLoadingScreen) {
-			markTimeline("NoLoadingScreen 撤下沿用中的地形加载界面，画面交还给玩家");
+			markTimeline("Terrain screen dismissed");
 			ClientUi.setScreen(minecraft, null);
 		}
 	}
@@ -607,7 +630,7 @@ public final class NoLoadingScreen {
 	/** Called from {@code LevelLoadTracker#loadingPacketsReceived}. */
 	public static void onLoadingPacketsReceived() {
 		if (!forcingLoadingPackets) {
-			markTimeline("服务端已开始发送区块 (LEVEL_CHUNKS_LOAD_START)");
+			markTimeline("Server chunk stream started");
 		}
 	}
 
@@ -646,7 +669,7 @@ public final class NoLoadingScreen {
 
 		if (!gateReleased) {
 			gateReleased = true;
-			markTimeline("放行闸门 (instant, 玩家区块已到达=" + chunkPresent + ")");
+			markTimeline("Loading gate released");
 			if (!chunkPresent && player != null) {
 				holdActive = true;
 				heldPlayer = player;
@@ -664,51 +687,56 @@ public final class NoLoadingScreen {
 			return;
 		}
 
-		long terrainMs = ClientRuntime.millis() - loadStartMs;
+		clientReadyAtMs = ClientRuntime.millis();
 		loadStartMs = -1L;
 		LoadingWork.worldArriving();
-
-		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
-		endTimeline("进入世界 (发送 ServerboundPlayerLoadedPacket)");
-		long joinMs = finishPhases();
-
-		if (config.showJoinTime) {
-			reportJoinTime(joinMs >= 0L ? joinMs : terrainMs);
-		}
+		markTimeline("Player entered the world");
+		completeJoinWhenReady();
 	}
 
-	/**
-	 * The same numbers the log always gets, put in chat as well.
-	 *
-	 * <p>The total is the whole join, matching the "Join finished in ... ms" line. Reporting the last
-	 * {@code startClientLoad} instead — which is what this used to do — turns a 1.2 second server
-	 * switch into "joined in 7 ms", because a proxy hands out several of them in a row and only the
-	 * last one was still running when the gate opened. The terrain leg is the fallback for joins that
-	 * never entered the phase tracker at all.
-	 */
-	private static void reportJoinTime(final long totalMs) {
-		ClientUi.systemMessage(Minecraft.getInstance(), Component.translatable("noloadingscreen.message.joinTime", totalMs));
+	private static void completeJoinWhenReady() {
+		if (clientReadyAtMs < 0 || !NoLoadingScreenConfig.get().enabled || PlaceholderWorld.active()) return;
+		Minecraft client = Minecraft.getInstance();
+		if (client.player == null || client.level == null || !hasPlayerChunk(client.level, client.player)) return;
+		LOGGER.info("World data became available {}ms after player entry.", ClientRuntime.millis() - clientReadyAtMs);
+		clientReadyAtMs = -1L;
+		endTimeline("World ready");
+		finishPhases();
+	}
 
-		if (lastJoinPhases.isEmpty()) {
-			return;
+	/** The exact vanilla owner/status, not a translated copy of our internal phase names. */
+	public static Component vanillaLoadingMessage() {
+		if (DisconnectedWorldView.active()) {
+			var screen = DisconnectedWorldView.fallbackScreen();
+			return ((io.github.bingkkni.noloadingscreen.mixin.DisconnectedScreenAccessor) screen).nls$details().reason();
 		}
+		if (suppressedConnectScreen != null) return ((ConnectScreenAccessor) suppressedConnectScreen).nls$status();
+		if (suppressedConfigScreen != null) return suppressedConfigScreen.getTitle();
+		if (resourceScreen != null) return resourceScreen.getTitle();
+		return Component.translatable("multiplayer.downloadingTerrain");
+	}
 
-		MutableComponent breakdown = Component.empty();
-		for (int i = 0; i < lastJoinPhases.size(); i++) {
-			PhaseTime entry = lastJoinPhases.get(i);
-			if (i > 0) {
-				breakdown.append(" · ");
-			}
-			breakdown.append(
-				Component.translatable(
-					"noloadingscreen.message.joinPhase",
-					Component.translatable(entry.phase().shortTranslationKey()),
-					entry.ms()
-				)
-			);
+	private static void checkMultiplayerTimeout() {
+		if (multiplayerStartMs < 0 || !NoLoadingScreenConfig.get().enabled || DisconnectedWorldView.active()) return;
+		Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft.isLocalServer() || minecraft.getSingleplayerServer() != null) { multiplayerStartMs = -1L; return; }
+		if (!PlaceholderWorld.active() && levelReadySeen && minecraft.player != null && minecraft.level != null
+			&& hasPlayerChunk(minecraft.level, minecraft.player)) { multiplayerStartMs = -1L; return; }
+		int seconds = NoLoadingScreenConfig.get().waitSeconds();
+		if (seconds == 0 || ClientRuntime.millis() - multiplayerStartMs < seconds * 1000L) return;
+		Connection connection = suppressedConnectScreen != null ? ((ConnectScreenAccessor) suppressedConnectScreen).nls$connection()
+			: suppressedConfigScreen != null ? ((ServerReconfigScreenAccessor) suppressedConfigScreen).nls$connection()
+			: minecraft.getConnection() != null ? minecraft.getConnection().getConnection() : null;
+		long elapsed = ClientRuntime.millis() - multiplayerStartMs;
+		multiplayerStartMs = -1L;
+		if (connection != null) {
+			LOGGER.info("Server join timed out after {}ms.", elapsed);
+			connection.disconnect(Component.translatable("disconnect.timeout"));
+		} else if (suppressedConnectScreen != null) {
+			Screen parent = ((ConnectScreenAccessor) suppressedConnectScreen).nls$parent();
+			onDisconnected();
+			ClientUi.setScreen(minecraft, new DisconnectedScreen(parent, Component.translatable("connect.failed"), Component.translatable("disconnect.timeout")));
 		}
-
-		ClientUi.systemMessage(Minecraft.getInstance(), Component.translatable("noloadingscreen.message.joinPhases", breakdown));
 	}
 
 	/**
@@ -726,10 +754,6 @@ public final class NoLoadingScreen {
 		NoLoadingScreenConfig config = NoLoadingScreenConfig.get();
 		if (!config.enabled || !config.loadingOverlay) {
 			return null;
-		}
-
-		if (overlayStartMs >= 0L && ClientRuntime.millis() - overlayStartMs > OVERLAY_TIMEOUT_MS) {
-			return clearOverlay();
 		}
 
 		Minecraft minecraft = Minecraft.getInstance();
@@ -756,7 +780,7 @@ public final class NoLoadingScreen {
 		if (!config.enabled || !config.loadingOverlay) {
 			return false;
 		}
-		return !DisconnectedWorldView.active() && (PlaceholderWorld.active() || overlayTracker() != null);
+		return PlaceholderWorld.active() || overlayTracker() != null;
 	}
 
 	private static @Nullable LevelLoadTracker clearOverlay() {
@@ -774,6 +798,7 @@ public final class NoLoadingScreen {
 	/** The anchor belongs to one real player and follows every authoritative teleport. */
 	public static void onPlayerPositionReceived() {
 		LocalPlayer player = Minecraft.getInstance().player;
+		CapeContinuity.restore(player, true);
 		if (holdActive && player != null && player == heldPlayer) {
 			holdPos = player.position();
 		}
@@ -790,10 +815,27 @@ public final class NoLoadingScreen {
 		// Test the server's anchor, not a position physics may already have moved across a border.
 		if (LevelAccess.hasChunk(level, holdPos)) {
 			clearHold();
-			markTimeline("玩家区块到达，恢复正常物理");
+			markTimeline("Player chunk received; normal physics resumed");
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Called at the head of {@code LocalPlayer#tick}. Until {@code ServerboundPlayerLoadedPacket}
+	 * has gone out vanilla returns from that method at once: no {@code aiStep}, no
+	 * {@code LivingEntity#tick}, nothing that copies the view into {@code yHeadRot} or turns the
+	 * body. Vanilla hides that window behind "Loading terrain"; this mod shows it, with the mouse
+	 * grabbed, so a third-person player would watch their own head jitter between the
+	 * constructor's random yaw and a zero {@code yHeadRotO} on every frame, and the body ignore the
+	 * camera. Run the same visual bookkeeping vanilla will run once the tick is real. No packet is
+	 * involved either way, and the first real tick then continues from the same pose.
+	 */
+	public static void beforePlayerTick(final LocalPlayer player) {
+		if (!NoLoadingScreenConfig.get().enabled || ClientReadiness.loaded(player)) return;
+		player.avatarState().tick(player.position(), Vec3.ZERO);
+		PlaceholderVisuals.followView(player, 0.0, 0.0);
+		io.github.bingkkni.noloadingscreen.compat.WaveyCapesCompatibility.tick(player);
 	}
 
 	/** An absent floor is not a landing: vanilla cancels ability flight when onGround is true. */
@@ -813,7 +855,7 @@ public final class NoLoadingScreen {
 	// --- Diagnostics -----------------------------------------------------------------------
 	// The join sequence spans several screens and two protocol phases, and which part is slow
 	// depends entirely on the server. Rather than guess, every join writes a timeline to
-	// latest.log; the chat summary is the part that is optional. Nothing is logged with the mod
+	// latest.log without adding chat summaries or a stopwatch overlay. Nothing is logged with the mod
 	// off, so "disabled" really does mean vanilla, including in the log file.
 
 	public static boolean timelineActive() {
@@ -827,7 +869,7 @@ public final class NoLoadingScreen {
 		long now = ClientRuntime.millis();
 		timelineStart = now;
 		timelineLast = now;
-		LOGGER.info("[timeline] ===== {} =====", label);
+		LOGGER.info("{}.", label);
 	}
 
 	public static void markTimeline(final String label) {
@@ -839,7 +881,7 @@ public final class NoLoadingScreen {
 			return;
 		}
 		long now = ClientRuntime.millis();
-		LOGGER.info("[timeline] 累计 {} ms  (本段 +{} ms)  {}", now - timelineStart, now - timelineLast, label);
+		LOGGER.info("{} after {}ms.", label, now - timelineLast);
 		timelineLast = now;
 	}
 

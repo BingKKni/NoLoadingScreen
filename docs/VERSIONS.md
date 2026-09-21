@@ -12,6 +12,7 @@ Every target is a separate build and release JAR. Do not mix loader or Minecraft
 | 26.1.1 | Fabric Loader 0.19.3 | 25 | `platforms/fabric-26.1.1` |
 | 26.1.2 | Fabric Loader 0.19.3 | 25 | `platforms/fabric-26.1.2` |
 | 26.2 | Fabric Loader 0.19.3 | 25 | `.` |
+| 26.3 | Fabric Loader 0.19.5 | 25 | `platforms/fabric-26.3` |
 | 26.1 | NeoForge 26.1.0.19-beta | 25 | `platforms/neoforge-26.1` |
 | 26.1.1 | NeoForge 26.1.1.15-beta | 25 | `platforms/neoforge-26.1.1` |
 | 26.1.2 | NeoForge 26.1.2.109 | 25 | `platforms/neoforge-26.1.2` |
@@ -23,9 +24,9 @@ Every target is a separate build and release JAR. Do not mix loader or Minecraft
 | 1.21.10 | NeoForge 21.10.64 | 21 | `platforms/neoforge-1.21.10` |
 | 1.21.11 | NeoForge 21.11.45 | 21 | `platforms/neoforge-1.21.11` |
 
-NeoForge's last builds for Minecraft 26.1 and 26.1.1 are beta releases. Minecraft 26.1.2 has a stable NeoForge build. The existing 1.21.10/1.21.11 targets, dependencies and optional-mod policy remain unchanged; see [their evidence and limits](NEOFORGE.md).
+Minecraft 26.3 (released 2026-09-15) currently has a Fabric target only: as of 2026-09-16 NeoForge's `26.3.x` port is still an unmerged, non-compiling pull request and no NeoForge or Forge 26.3 build exists on either Maven. Their targets will be added once a build is published. NeoForge's last builds for Minecraft 26.1 and 26.1.1 are beta releases. Minecraft 26.1.2 has a stable NeoForge build. The existing 1.21.10/1.21.11 targets, dependencies and optional-mod policy remain unchanged; see [their evidence and limits](NEOFORGE.md).
 
-NeoForge 对 Minecraft 26.1、26.1.1 的最后发布版本仍带 beta 标记；26.1.2 有正式版。原有 NeoForge 1.21.10、1.21.11 的依赖、支持与可选模组策略不变。
+Minecraft 26.3（2026-09-15 发布）目前只有 Fabric 目标：截至 2026-09-16，NeoForge 的 26.3 移植仍是未合并、尚不能编译的 PR，NeoForge 与 Forge 的 Maven 上都没有 26.3 构建；发布后再补目标。NeoForge 对 Minecraft 26.1、26.1.1 的最后发布版本仍带 beta 标记；26.1.2 有正式版。原有 NeoForge 1.21.10、1.21.11 的依赖、支持与可选模组策略不变。
 
 ## Build
 
@@ -60,6 +61,7 @@ Build plugins are pinned to Loom 1.17.20 for the new Fabric targets, ModDevGradl
 
 - `src/main/java` remains the shared feature state machine and Fabric 26.2 API layer.
 - `platforms/minecraft-26.1` supplies the older GUI ownership, frame/extraction backend, scene constructors, readiness and terrain compilation APIs. All three 26.1 releases use this same source pool, compiled separately against each real game JAR.
+- `platforms/minecraft-26.3` supplies the SDL input path (`SDLEventHandlerMixin`, `WaitInputMixin`, `MinecraftEventsAccessor`), the renderpearl GPU surface (`FrameSurface`), authlib 10's profile result (`ProfileLookup`), the `SwingState`-based arm swing (`PlayerAnimation`, `SwingStateAccessor`), the player-owned first-person hand state (`SceneRenderer.tickHands`), the `ItemActivation` player constructor (`SceneFactory.createPlayer`) and the fade-aware entity visibility test. Shared code reaches all of these through adapter classes; no shared file names a game version. A family may also list shared files it has no counterpart for (`sharedExcludes` in the target's `build.gradle`; 26.3 drops `GameRendererAccessor` because 26.3's `GameRenderer` has no private member left to reach). Test fixtures follow the same rule through `platforms/<family>/src/test/java`.
 - Loader-specific source layers contain only loader/bootstrap/configuration APIs and patched injection hosts. Source selection happens during Gradle configuration by package-relative file path, not by rewriting Java source or testing Minecraft versions at runtime.
 - Existing mapped NeoForge 1.21 builds stay separate under `neoforge-common.gradle`. Java 21 mappings and Java 25 unobfuscated game dependencies never share a compilation classpath.
 - All targets reuse `src/main/resources/assets/noloadingscreen/icon.png`. Fabric metadata references `icon`; FML metadata references `logoFile`. New release checks validate the actual PNG bytes, reference, metadata, Java 25 bytecode and test/loader isolation.
@@ -72,12 +74,12 @@ Forge's bundled upstream Mixin uses the `JAVA_21` capability label, while compil
 
 新增版本的无窗口转换检查证明严格注入点能应用到对应游戏和加载器，不等同于 GPU、整合包、真实跨服或服务器玩法验收。发布前仍应执行[实机清单](TESTING.zh-CN.md)，尤其是保存退出、KickWarn、F5、物品栏、资源包重载和渲染异常恢复。
 
-The existing Fabric 26.2 and NeoForge 1.21 optional-mod results do **not** certify the new targets by themselves. NeoForge 26.2 now shares the root whitelist: Sodium's private hooks, class warmup, terrain-pipeline precompilation and single-worker synthetic void are enabled for the exact build `0.9.2+mc26.2`, verified through `./gradlew -p platforms/neoforge-26.2 verifyCompatibility -PcompatibilityJars=<sodium-neoforge jar>` (seven private hooks plus the actual collector fixtures) and the `verifyRepairGpu` run with that jar. Sodium's NeoForge release keeps its classes in a `META-INF/jarjar` nested jar; the whitelist checks the `sodium` mod version, not the outer jar. Forge 26.x and Fabric 26.1 still keep Sodium's native scheduling because no build was verified for them. Other loading/rendering mods can still conflict. No optional performance mod is bundled or required.
+The existing Fabric 26.2 and NeoForge 1.21 optional-mod results do **not** certify the new targets by themselves. NeoForge 26.2 now shares the root whitelist: Sodium's private hooks, class warmup, terrain-pipeline precompilation and single-worker synthetic void are enabled for the exact build `0.9.2+mc26.2`, verified through `./gradlew -p platforms/neoforge-26.2 verifyCompatibility -PcompatibilityJars=<sodium-neoforge jar>` (seven private hooks plus the actual collector fixtures) and the `verifyRepairGpu` run with that jar. Sodium's NeoForge release keeps its classes in a `META-INF/jarjar` nested jar; the whitelist checks the `sodium` mod version, not the outer jar. Every other 26.x Fabric/NeoForge target now carries its own exact-build whitelist in `platforms/<target>/src/main/java/.../compat/SodiumCompatibility.java`: `0.9.2+mc26.3` (Fabric 26.3), `0.9.2+mc26.1.2` (26.1.2) and `0.8.9+mc26.1.1` (26.1 and 26.1.1; the 26.1 API family's shader warm-up is a no-op because those Sodium builds compile GL programs on first use). The Fabric targets gained the same `verifyCompatibility -PcompatibilityJars=...` task as NeoForge. Forge 26.x still keeps Sodium's native scheduling because no official Sodium Forge build exists. Other loading/rendering mods can still conflict; the per-mod review of the community's most used optimizers, the multi-mod stacks that were transformed per version and the two conflicts fixed on this side are in [OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md](OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md). No optional performance mod is bundled or required.
 
-`verifyRepairGpu` (opt-in, every target) runs an isolated real-GPU regression: synthetic placeholder, a live-session save wait through the actual transformed `Minecraft.disconnect` with GLFW-injected input, KickWarn, middle-click pick, hand swap, sprint FOV and inventory frames. Commands and asset indexes are in [TESTING.zh-CN.md](TESTING.zh-CN.md).
+`verifyRepairGpu` (opt-in, every target) runs an isolated real-GPU regression: synthetic placeholder, a live-session save wait through the actual transformed `Minecraft.disconnect` with injected input (GLFW callbacks up to 26.2, `SDL_PushEvent` on 26.3, so the game's own dispatch chain is exercised either way), KickWarn, middle-click pick, hand swap, sprint FOV and inventory frames. Commands and asset indexes are in [TESTING.zh-CN.md](TESTING.zh-CN.md).
 
-Fabric 26.1 compiles its optional Mod Menu integration against 18.0.1, whose upstream release covers 26.1/26.1.1/26.1.2. Root Fabric 26.2 retains Mod Menu 20.0.1. Both use the same settings screen; FML loaders expose it in their Mod list.
+Fabric 26.1 compiles its optional Mod Menu integration against 18.0.1, whose upstream release covers 26.1/26.1.1/26.1.2. Root Fabric 26.2 retains Mod Menu 20.0.1. Fabric 26.3 compiles against 21.0.0-beta.1, the only Mod Menu build published for the 26.3 line so far (tagged for 26.3-rc-1; no build is tagged for the 26.3 release yet). All use the same settings screen; FML loaders expose it in their Mod list.
 
 ## CI and Releases
 
-The build workflow contains all 14 targets. The tag-release workflow reuses that matrix, waits for all checks, and attaches the 14 main JARs and 14 source JARs. It does not publish a partial release when a target fails. CI uses the tag's version explicitly; normal local builds keep `gradle.properties` unchanged.
+The build workflow contains all 15 targets. The tag-release workflow reuses that matrix, waits for all checks, and attaches the 15 main JARs and 15 source JARs. It does not publish a partial release when a target fails. CI uses the tag's version explicitly; normal local builds keep `gradle.properties` unchanged.

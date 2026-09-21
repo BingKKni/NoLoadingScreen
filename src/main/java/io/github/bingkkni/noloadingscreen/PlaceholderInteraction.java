@@ -7,6 +7,7 @@ import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Inventory;
 import io.github.bingkkni.noloadingscreen.platform.InventoryAccess;
+import io.github.bingkkni.noloadingscreen.platform.PlayerAnimation;
 import io.github.bingkkni.noloadingscreen.InventoryClick;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -20,28 +21,75 @@ import net.minecraft.world.phys.HitResult;
 /** Local edits to a disposable client world, never MultiPlayerGameMode's packet/prediction path. */
 public final class PlaceholderInteraction {
 	private int useDelay;
+	private int breakDelay;
+	private BlockPos breaking;
+	private net.minecraft.world.level.block.state.BlockState breakingState;
+	private ItemStack breakingTool;
+	private float breakProgress;
 
-	public void reset() { this.useDelay = 0; }
-	public void tick() { if (this.useDelay > 0) this.useDelay--; }
+	public void reset() { this.useDelay = this.breakDelay = 0; this.breaking = null; this.breakingState = null; this.breakingTool = null; this.breakProgress = 0; }
+	public void tick() { if (this.useDelay > 0) this.useDelay--; if (this.breakDelay > 0) this.breakDelay--; }
+
+	public void stopBreaking(final LocalPlayer player) {
+		if (breaking != null) ((ClientLevel) player.level()).destroyBlockProgress(player.getId(), breaking, -1);
+		breaking = null;
+		breakingState = null;
+		breakingTool = null;
+		breakProgress = 0;
+	}
+
+	public void continueAttack(final LocalPlayer player) {
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || breakDelay > 0) return;
+		if (net.minecraft.client.Minecraft.getInstance().hitResult instanceof net.minecraft.world.phys.EntityHitResult) {
+			stopBreaking(player);
+			return;
+		}
+		HitResult target = player.pick(player.blockInteractionRange(), 1.0F, false);
+		if (!(target instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) { stopBreaking(player); return; }
+		ClientLevel level = (ClientLevel) player.level();
+		BlockPos pos = hit.getBlockPos();
+		var state = level.getBlockState(pos);
+		if (state.isAir() || player.blockActionRestricted(level, pos, PlaceholderWorld.localMode())) { stopBreaking(player); return; }
+		if (!pos.equals(breaking) || state != breakingState || !ItemStack.matches(breakingTool, player.getMainHandItem())) {
+			stopBreaking(player);
+			breaking = pos.immutable();
+			breakingState = state;
+			breakingTool = player.getMainHandItem().copy();
+		}
+		PlaceholderEquipment.update(player);
+		PlayerAnimation.swingAttack(player);
+		breakProgress += player.isCreative() ? 1 : state.getDestroyProgress(player, level, pos);
+		if (breakProgress >= 1) {
+			breakBlock(player, hit);
+			stopBreaking(player);
+			breakDelay = 5;
+		} else level.destroyBlockProgress(player.getId(), pos, (int) (breakProgress * 10) - 1);
+	}
 
 	public void attack(final LocalPlayer player) {
-		if (!PlaceholderWorld.owns(player)) return;
-		// The one-argument LocalPlayer.swing sends a packet; LivingEntity's two-argument overload
-		// only updates animation on a ClientLevel.
-		player.swing(InteractionHand.MAIN_HAND, false);
-		HitResult target = player.pick(player.blockInteractionRange(), 1.0F, false);
-		if (target instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
-			breakBlock(player, hit);
+		if (!PlaceholderWorld.owns(player) || player.isSpectator()) return;
+		// Snapshot entities remain entities, not blocks. Give local hit feedback without attack packets.
+		var target = net.minecraft.client.Minecraft.getInstance().hitResult;
+		if (target instanceof net.minecraft.world.phys.EntityHitResult hit) {
+			PlayerAnimation.swingAttack(player);
+			if (hit.getEntity() instanceof net.minecraft.world.entity.LivingEntity living) {
+				PlaceholderVisuals.hit(living);
+			}
+			return;
 		}
+		if (player.isCreative()) breakDelay = 0; // fresh presses are instant; held mining keeps its cadence
+		continueAttack(player);
 	}
 
 	public static boolean breakBlock(final LocalPlayer player, final BlockHitResult hit) {
-		if (!PlaceholderWorld.owns(player) || hit.getType() != HitResult.Type.BLOCK) return false;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || hit.getType() != HitResult.Type.BLOCK) return false;
 		ClientLevel level = (ClientLevel) player.level();
 		BlockPos pos = hit.getBlockPos();
-		if (!level.hasChunkAt(pos) || level.isOutsideBuildHeight(pos)) return false;
+		if (!level.isLoaded(pos) || level.isOutsideBuildHeight(pos)
+			|| player.blockActionRestricted(level, pos, PlaceholderWorld.localMode())) return false;
 		var state = level.getBlockState(pos);
-		// No loot, durability or entity attacks. Client updates invalidate retained meshes,
+		if (!player.isCreative() && state.getDestroySpeed(level, pos) < 0) return false;
+		// No server loot/durability callbacks. Client updates invalidate retained meshes,
 		// including Sodium's normal hooks. Failed/air edits must not produce phantom feedback.
 		if (state.isAir() || !level.setBlock(pos, state.getFluidState().createLegacyBlock(), Block.UPDATE_ALL | Block.UPDATE_IMMEDIATE)) return false;
 		PlaceholderBlockEffects.destroy(level, pos, state);
@@ -55,7 +103,7 @@ public final class PlaceholderInteraction {
 		if (target instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
 			for (InteractionHand hand : InteractionHand.values()) {
 				if (placeBlock(player, hand, hit)) {
-					player.swing(hand, false);
+					PlayerAnimation.swingUse(player, hand);
 					return;
 				}
 			}
@@ -63,35 +111,36 @@ public final class PlaceholderInteraction {
 	}
 
 	public static boolean placeBlock(final LocalPlayer player, final InteractionHand hand, final BlockHitResult hit) {
-		if (!PlaceholderWorld.owns(player) || hit.getType() != HitResult.Type.BLOCK) return false;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || hit.getType() != HitResult.Type.BLOCK) return false;
 		ItemStack stack = player.getItemInHand(hand);
 		if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem item)) return false;
 		ClientLevel level = (ClientLevel) player.level();
+		if (!player.getAbilities().mayBuild && !stack.canPlaceOnBlockInAdventureMode(
+			new net.minecraft.world.level.block.state.pattern.BlockInWorld(level, hit.getBlockPos(), false))) return false;
 		BlockPlaceContext context = new BlockPlaceContext(new UseOnContext(player, hand, hit));
-		if (!level.hasChunkAt(hit.getBlockPos()) || !level.hasChunkAt(context.getClickedPos())
+		if (!level.isLoaded(hit.getBlockPos()) || !level.isLoaded(context.getClickedPos())
 			|| level.isOutsideBuildHeight(context.getClickedPos())) return false;
 		int before = stack.getCount();
 		// Calling place directly skips use-on-block (chests/buttons/etc.) and use-item (food,
 		// buckets/projectiles) entirely. Vanilla still supplies orientation, support, collision,
 		// replacement, waterlogging and multiblock placement. ClientLevel never persists to disk.
 		if (!item.place(context).consumesAction()) return false;
-		// Survival consumption even if the outgoing server's cached GameType was creative.
-		stack.setCount(before - 1);
+		stack.setCount(player.isCreative() ? before : before - 1);
 		return true;
 	}
 
 	/** Creative-style pick, including all block-entity data available in this client snapshot. */
 	public static boolean pickBlock(final LocalPlayer player) {
-		if (!PlaceholderWorld.owns(player)) return false;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator()) return false;
 		HitResult target = player.pick(player.blockInteractionRange(), 1.0F, false);
 		return target instanceof BlockHitResult hit && pickBlock(player, hit);
 	}
 
 	public static boolean pickBlock(final LocalPlayer player, final BlockHitResult hit) {
-		if (!PlaceholderWorld.owns(player) || hit.getType() != HitResult.Type.BLOCK) return false;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || hit.getType() != HitResult.Type.BLOCK) return false;
 		ClientLevel level = (ClientLevel) player.level();
 		BlockPos pos = hit.getBlockPos();
-		if (!level.hasChunkAt(pos) || level.isOutsideBuildHeight(pos)) return false;
+		if (!level.isLoaded(pos) || level.isOutsideBuildHeight(pos)) return false;
 		var state = level.getBlockState(pos);
 		if (state.isAir()) return false;
 		ItemStack picked = state.getCloneItemStack(level, pos, true);
@@ -115,24 +164,35 @@ public final class PlaceholderInteraction {
 		int existing = inventory.findSlotMatchingItem(picked); // compares components, not just item id
 		if (Inventory.isHotbarSlot(existing)) inventory.setSelectedSlot(existing);
 		else if (existing >= 0) inventory.pickSlot(existing);
-		else inventory.addAndPickItem(picked);
+		else if (player.isCreative()) inventory.addAndPickItem(picked);
+		else return false;
 		return true;
 	}
 
 	public static void selectSlot(final LocalPlayer player, final int slot) {
-		if (PlaceholderWorld.owns(player) && slot >= 0 && slot < 9) player.getInventory().setSelectedSlot(slot);
+		if (PlaceholderWorld.owns(player) && !player.isSpectator() && slot >= 0 && slot < 9) player.getInventory().setSelectedSlot(slot);
 	}
 
 	public static void swapOffhand(final LocalPlayer player) {
-		if (!PlaceholderWorld.owns(player)) return;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator()) return;
 		ItemStack main = player.getMainHandItem();
 		player.setItemInHand(InteractionHand.MAIN_HAND, player.getOffhandItem());
 		player.setItemInHand(InteractionHand.OFF_HAND, main);
 	}
 
-	/** Vanilla inventory manipulation without its network wrapper. Deliberately no crafting/drop. */
+	/** Vanilla stack manipulation, with local drop branches and no crafting/server-container callbacks. */
 	public static void clickSlot(final LocalPlayer player, final int slot, final int button, final InventoryClick input) {
-		if (!PlaceholderWorld.owns(player)) return;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator()) return;
+		if (input == InventoryClick.THROW && slot >= 5 && slot < player.inventoryMenu.slots.size()) {
+			var target = player.inventoryMenu.slots.get(slot);
+			if (target.mayPickup(player)) PlaceholderItems.drop(player, target.remove(button == 0 ? 1 : target.getItem().getCount()));
+			return;
+		}
+		if (input == InventoryClick.PICKUP && slot == -999) {
+			ItemStack carried = player.inventoryMenu.getCarried();
+			PlaceholderItems.drop(player, carried.split(button == 0 ? carried.getCount() : 1));
+			return;
+		}
 		// LocalPlayer.drop/creative drop and result-slot callbacks can send packets. Never enter
 		// those branches. Quick-craft's negative start/end markers are local state transitions.
 		if (input == InventoryClick.THROW || input == InventoryClick.CLONE) return;

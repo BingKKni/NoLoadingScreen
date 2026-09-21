@@ -2,6 +2,7 @@ package io.github.bingkkni.noloadingscreen;
 
 import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.PlayerAccessor;
+import io.github.bingkkni.noloadingscreen.platform.PlayerAnimation;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
@@ -10,9 +11,32 @@ import net.minecraft.world.phys.Vec3;
 /** Visual-only pieces of the vanilla player tick. Never calls tick, aiStep, move or sends packets. */
 public final class PlaceholderVisuals {
 	private PlaceholderVisuals() {}
+	private static final java.util.Map<net.minecraft.world.entity.LivingEntity, Integer> hitAnimations = new java.util.IdentityHashMap<>();
+
+	public static void hit(net.minecraft.world.entity.LivingEntity entity) {
+		hitAnimations.putIfAbsent(entity, entity.hurtTime);
+		entity.hurtTime = entity.hurtDuration = 10;
+	}
+
+	public static void clearHits() {
+		hitAnimations.forEach((entity, oldTime) -> entity.hurtTime = oldTime);
+		hitAnimations.clear();
+	}
+
+	private static void tickHits() {
+		var iterator = hitAnimations.entrySet().iterator();
+		while (iterator.hasNext()) {
+			var entry = iterator.next();
+			if (--entry.getKey().hurtTime <= 0) {
+				entry.getKey().hurtTime = entry.getValue();
+				iterator.remove();
+			}
+		}
+	}
 
 	/** Deltas are collision-resolved simulation movement, never per-frame interpolated positions. */
 	public static void tick(final LocalPlayer player, final double dx, final double dy, final double dz) {
+		tickHits();
 		Vec3 motion = new Vec3(dx, dy, dz);
 		float distance = (float) motion.horizontalDistance();
 		player.setDeltaMovement(motion);
@@ -25,9 +49,20 @@ public final class PlaceholderVisuals {
 		LivingEntityAccessor visuals = (LivingEntityAccessor) player;
 		visuals.nls$setItemSwapTicker(visuals.nls$itemSwapTicker() + 1);
 		trackMainHandItem(player, visuals);
-		player.oAttackAnim = player.attackAnim;
-		visuals.nls$updateSwingTime(); // finish a captured swing rather than hold its pose forever
+		PlayerAnimation.tickSwing(player); // finish a captured swing rather than hold its pose forever
 		if (player.hurtTime > 0) player.hurtTime--;
+		followView(player, dx, dz);
+		player.elytraAnimationState.tick();
+		io.github.bingkkni.noloadingscreen.compat.WaveyCapesCompatibility.tick(player);
+	}
+
+	/**
+	 * {@code Player.aiStep}'s head follow plus {@code LivingEntity.tick}'s body turn and range
+	 * checks, with the deltas already resolved. Vanilla only runs those once the player is ticked
+	 * for real; until then the head keeps the constructor's random yaw against a zeroed
+	 * {@code yHeadRotO}, which the renderer interpolates into a per-tick sawtooth.
+	 */
+	public static void followView(final LocalPlayer player, final double dx, final double dz) {
 		player.yBodyRotO = player.yBodyRot;
 		player.yHeadRotO = player.yHeadRot;
 		player.yHeadRot = player.getYRot();
@@ -37,11 +72,10 @@ public final class PlaceholderVisuals {
 			float facingDifference = Math.abs(Mth.wrapDegrees(player.getYRot() - direction));
 			bodyTarget = facingDifference > 95.0F ? direction - 180.0F : direction;
 		}
-		if (player.attackAnim > 0.0F) bodyTarget = player.getYRot();
-		visuals.nls$tickHeadTurn(bodyTarget);
+		if (PlayerAnimation.swinging(player)) bodyTarget = player.getYRot();
+		((LivingEntityAccessor) player).nls$tickHeadTurn(bodyTarget);
 		player.yBodyRotO = player.yBodyRot - Mth.wrapDegrees(player.yBodyRot - player.yBodyRotO);
 		player.yHeadRotO = player.yHeadRot - Mth.wrapDegrees(player.yHeadRot - player.yHeadRotO);
-		player.elytraAnimationState.tick();
 	}
 
 	/**

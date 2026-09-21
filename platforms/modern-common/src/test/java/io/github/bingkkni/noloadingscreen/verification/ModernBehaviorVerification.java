@@ -353,6 +353,7 @@ public final class ModernBehaviorVerification {
         }
         check(adoptionChecks.get() == 4, "Saving and kick callbacks each reach the real adoption guard once per attempted snapshot");
         config.enabled = true;
+        verifyRetainedSceneDetach(client, outgoing, snapshot);
         client.level = null;
         client.player = null;
         for (boolean fail : new boolean[]{false, true}) {
@@ -379,6 +380,31 @@ public final class ModernBehaviorVerification {
         }
         verifyRealDisconnectFailure(client, snapshot, title);
         NoLoadingScreen.onDisconnected();
+    }
+
+    /** The level field is detached before vanilla's null write, so third-party cleanup there cannot reach the retained scene. */
+    private static void verifyRetainedSceneDetach(Minecraft client, ClientLevel outgoing, Object snapshot) throws Exception {
+        Method detach = uniqueMethod(Minecraft.class, "nls$detachRetainedScene");
+        Object hud = allocate(detach.getParameterTypes()[0]);
+        AtomicInteger resets = new AtomicInteger();
+        Operation<Void> original = args -> { check(args[0] == hud, "HUD reset keeps its receiver"); resets.incrementAndGet(); return null; };
+        try {
+            client.level = outgoing;
+            invoke(detach, client, hud, original);
+            check(resets.get() == 1 && client.level == outgoing, "Without a retained scene the level field stays for vanilla's own teardown");
+            set(SavingWorldView.class, null, "outgoing", snapshot);
+            invoke(detach, client, hud, original);
+            check(resets.get() == 2 && client.level == null, "A pending save scene detaches the level right after the HUD reset");
+            set(SavingWorldView.class, null, "outgoing", null);
+            client.level = outgoing;
+            set(DisconnectedWorldView.class, null, "fallback", allocate(DisconnectedScreen.class));
+            invoke(detach, client, hud, original);
+            check(resets.get() == 3 && client.level == null, "A KickWarn retention detaches the level right after the HUD reset");
+        } finally {
+            DisconnectedWorldView.clear();
+            set(SavingWorldView.class, null, "outgoing", null);
+            client.level = null;
+        }
     }
 
     private static void verifyRealDisconnectFailure(Minecraft client, Object snapshot, Screen title) throws Exception {
@@ -517,11 +543,10 @@ public final class ModernBehaviorVerification {
     }
 
     // Unsafe bypasses constructors requiring a real client/world; only the overridden queries run.
-    private static final class TestPlayer extends LocalPlayer {
+    private static final class TestPlayer extends PlayerFixture {
         Inventory inventory;
         boolean dead;
         Runnable deathQuery;
-        private TestPlayer() { super(null, null, null, null, null, null, false, null); }
         @Override public boolean isSpectator() { return false; }
         @Override public boolean isAlive() { return true; }
         @Override public boolean isDeadOrDying() {

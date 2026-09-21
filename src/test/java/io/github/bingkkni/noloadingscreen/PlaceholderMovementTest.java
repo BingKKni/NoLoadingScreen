@@ -128,7 +128,7 @@ public final class PlaceholderMovementTest {
 
 	private static void testFlight() {
 		PlaceholderMovement up = grounded(), diagonal = grounded();
-		PlaceholderMovement.Collision forbidden = d -> { throw new AssertionError("flight must bypass collision"); };
+		PlaceholderMovement.Collision forbidden = d -> d; // ordinary ability flight queries collision
 		for (int i = 0; i < 300; i++) {
 			up.tick(0, 0, 1, 0, NORMAL, true, false, false, true, -1000, 1000, forbidden);
 			diagonal.tick(1, 0, 1, 0, NORMAL, true, true, false, true, -1000, 1000, forbidden);
@@ -144,6 +144,12 @@ public final class PlaceholderMovementTest {
 		close(1, m.y(1), "upper bound");
 		m.tick(0, 0, -1, 0, NORMAL, true, false, false, true, 0, 1, forbidden);
 		close(.85, m.y(1), "bound clears outward velocity");
+		m.reset(0, 1, 0, 0, 0, 0, false);
+		m.tick(1, 0, 0, 0, NORMAL, true, false, false, true, -64, 320, d -> new PlaceholderMovement.Motion(0, d.y(), 0));
+		close(0, m.z(1), "ordinary flight cannot pass walls");
+		m.tick(1, 0, 0, 0, NORMAL, true, false, false, true, -64, 320, true,
+			d -> { throw new AssertionError("explicit noclip must bypass collision"); });
+		check(m.z(1) > 0, "explicit noclip passes walls");
 	}
 
 	private static void testControls() {
@@ -180,6 +186,9 @@ public final class PlaceholderMovementTest {
 		check(!c.sprinting(), "zero sprintWindow disables double-W");
 		c.tick(true, false, false, false, true, 0, true);
 		check(c.sprinting(), "dedicated sprint key works with double-W disabled");
+		c.setFlying(true);
+		c.restrictFlight(false);
+		check(!c.flying(), "denied ability flight cancels a local gesture");
 	}
 
 	private static void testFlyingHandoff() {
@@ -200,7 +209,7 @@ public final class PlaceholderMovementTest {
 		m.reset(0, 90, 0, .2, 0, .3, false);
 		for (int i = 0; i < 100; i++) {
 			m.tick(0, 0, 0, 0, NORMAL, c.flying(), false, false, true, -64, 320,
-				d -> { throw new AssertionError("Inherited flight must not collide"); });
+				d -> d);
 		}
 		close(90, m.y(1), "Flying handoff does not acquire gravity");
 		check(!m.onGround(), "Flying handoff is not a landing");

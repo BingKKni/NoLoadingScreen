@@ -78,6 +78,17 @@ if (flag1) { ... this.renderLevel(deltaTracker); ... }
 `renderLevel` 第一件事又是 `LocalPlayer localplayer = this.minecraft.player;`，紧接着不判空就解引用。
 所以那段时间里，画面上除了一块全屏界面**不可能有别的东西**——黑屏不是取舍，是这两个字段为 null 的必然结果。
 
+### 「游戏规则、游戏模式、天气、时间」是和区块一起到的吗
+
+经常有这样的观感：单人进图时，周围方块显现出来的那一刻，进度条也差不多走完了，而游戏模式、天气这些「数据」看上去和区块是同时出现的。这不是 Mod 改了顺序，也不是看错，而是原版本来就这样发：
+
+1. **进度条量的不是客户端。** 单人进度条来自服务端的 `LevelLoadListener`，权重固定为 `10（准备出生点）+ 初始区块数 + 49（玩家出生点周围 7×7 区块）`，全部是**服务端**加载/生成区块的进度（`LOAD_INITIAL_CHUNKS`、`LOAD_PLAYER_CHUNKS`）。最后一段 `LOAD_PLAYER_CHUNKS` 在配置阶段的 `PrepareSpawnTask` 里完成，也就是在服务端**发送 `ClientboundLoginPacket` 之前**。所以进度条到 100% 的那一刻，客户端还没有世界、没有玩家；紧接着才是登录、规则、区块。
+2. **规则和世界信息都塞在登录后的同一批包里。** `PlayerList.placeNewPlayer` 在一次 `suspendFlushing()` 里依次发送：`ClientboundLoginPacket`（其中已带 `reducedDebugInfo`、`doLimitedCrafting`、`immediateRespawn` 这些游戏规则位和 `CommonPlayerSpawnInfo` 里的游戏模式、维度、种子）→ 难度 → 能力 → 手持槽 → 配方 → 权限 → 计分板 → **传送包**（第一次给客户端玩家坐标）→ 玩家列表（含皮肤 profile）→ `sendLevelInfo`（世界边界、**时钟/时间**、出生点、**天气**、`LEVEL_CHUNKS_LOAD_START`），然后 `resumeFlushing()`。这些包在同一个 TCP flush 里到达，客户端在同一个或相邻的 tick 里处理完，人眼分不出先后。
+3. **区块紧跟其后。** `LEVEL_CHUNKS_LOAD_START` 之后，`PlayerChunkSender` 每 tick 从 9 个区块起步发送玩家周围已就绪的区块（它们在 `PrepareSpawnTask` 里已经加载好了），所以玩家脚下和周围的第一批区块几乎与上面那批包同时到达；远处的区块才需要生成、按批发送、逐步显现。
+4. **本 Mod 改变的只是「看得见」。** 原版在这段时间显示「加载地形中」，直到玩家所在 section 建模完成才关掉界面——你看到世界时，上面的一切早就到了。本 Mod 一有 `ClientLevel` 就撤掉界面并立即放行闸门，你因此**看见了**这批包到达的瞬间；它没有创建、丢弃或重排任何数据包（`PacketProcessorMixin` 只在处理时长超过 8 ms 时在两个包之间让出一帧，队列顺序不变）。
+
+所以「按顺序一项一项加载」的心理模型对应的是服务端准备阶段，而那一段在原版和本 Mod 里都发生在你能看见世界之前。想让区块「慢慢在眼前出现」，能看到的部分只有 `PlayerChunkSender` 之后远处区块的逐批到达与建模——在渲染距离 4 且本地集成服务端的情况下，这一段本来就只有零点几秒。
+
 ---
 
 ## 它做了什么
@@ -205,6 +216,8 @@ public void renderFrame(boolean advanceGameTime) {
 
 闸门固定为立即放行，不等服务端开始发区块。若此时玩家所在区块还没到达，本模组会固定锁定玩家位置，
 直到该区块到达，避免客户端物理让玩家坠入虚空。锁定属于当前玩家，`handleMovePlayer` 完成原版绝对/相对坐标解析与传送确认后更新锚点，不回写旧出生点、不锁定 yaw/pitch。等待时不伪造 `onGround=true`，防止触发原版的落地取消飞行；重建世界、断开或禁用 Mod 时清除锁定。
+
+**就绪之前的头和身体。** `LocalPlayer.tick` 在 `hasClientLoaded()` 为假时直接返回，所以从登录到 `ServerboundPlayerLoadedPacket` 发出（新建世界还有 500 ms 的 `closeDelayMs`），没有任何原版代码把视角写进 `yHeadRot` 或转动 `yBodyRot`。原版用界面盖住这段时间；本模组撤掉界面并抓住鼠标，第三人称就会看到头停在构造器的随机 yaw 上、以零 `yHeadRotO` 为插值起点逐 tick 抽搐，身体也不跟着镜头转。`LocalPlayerMixin` 于是在 `tick` 的 HEAD、且仅在尚未就绪时，跑一遍 `Player.aiStep` 的头部跟随和 `LivingEntity.tick` 的身体转向/角度归一化（`PlaceholderVisuals.followView`）。只有旋转簿记，没有移动、挥手、年龄或数据包；原版接手后姿态连续，不会突然转头。
 
 ### 三、单人不再空转
 
@@ -361,8 +374,8 @@ Mod Menu 里点开，或直接编辑 `.minecraft/config/noloadingscreen.json`。
 ## 兼容性与已知限制
 
 - **纯客户端**，服务端不需要装。
-- **Sodium 私有钩子只对当前最新正式版按精确版本启用。** 已验证 `0.9.2+mc26.2` 的目标布局与行为；未知或预发布版本安全关闭这些私有优化。占位世界装卸仍可能触发渲染器重建和工作线程退出，目前没有将整套 GPU 资源拆除移到其他线程。
-- **常见 Fabric 优化组合已做实际 JAR 的无窗口目标转换检查。** 同一矩阵包含 Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.3、RRLS 5.2.8、Sodium 0.9.2 和 ViaFabricPlus 5.0.1；额外组合覆盖 Bobby 5.2.15、Distant Horizons 3.2.0-b、FastQuit 3.1.5 与 Reese's Sodium Options 2.2.3。这只能证明这些精确版本加载时 NoLoadingScreen 钩子成功保留，不能替代 GPU 或玩法测试。除 Sodium 的精确私有优化外，生产代码优先通过可串联的原版目标与生命周期兼容，不引入脆弱的第三方私有 API 依赖。
+- **Sodium 私有钩子只对每个目标精确验证过的正式版启用。** 已验证 `0.9.2+mc26.2`（26.2）、`0.9.2+mc26.3`（Fabric 26.3）、`0.9.2+mc26.1.2`（26.1.2）与 `0.8.9+mc26.1.1`（26.1/26.1.1，这两个版本仍在首次使用时编译 GL 程序，因此地形着色器预热为空实现）的目标布局与行为；未知或预发布版本安全关闭这些私有优化。各目标的白名单是编译期层文件，见[优化 Mod 适配分析](OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md)。占位世界装卸仍可能触发渲染器重建和工作线程退出，目前没有将整套 GPU 资源拆除移到其他线程。
+- **常见 Fabric 优化组合已做实际 JAR 的无窗口目标转换检查。** 同一矩阵包含 Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.4、BadOptimizations 2.4.1、Particle Core 0.3.3、RRLS 5.2.8、Sodium 0.9.2 和 ViaFabricPlus 5.0.1；额外组合覆盖 Bobby 5.2.15、Distant Horizons 3.2.0-b、FastQuit 3.1.5 与 Reese's Sodium Options 2.2.3。26.x 平台目标通过 `verifyCompatibility` 用各自版本的 JAR 做同类检查（NeoForge 26.1.2 含 ModernFix 5.27.22）。这只能证明这些精确版本加载时 NoLoadingScreen 钩子成功保留，不能替代 GPU 或玩法测试。源码对照发现的两处冲突已在本 Mod 侧修复：本地破坏碎屑改在 `LevelExtractor` 的调用点追加而不是在 `ParticleEngine.extract` 内部（BadOptimizations 会在粒子表为空时提前返回）；`disconnect` 中若保存/KickWarn 场景即将保留旧世界，则在 HUD 重置后、原版写 `null` 之前先把 `Minecraft.level` 置空（ModernFix 会在原版写 `null` 处清空该世界的区块与光照引擎）。除 Sodium 的精确私有优化外，生产代码优先通过可串联的原版目标与生命周期兼容，不引入脆弱的第三方私有 API 依赖。
 - ⚠️ **占位世界期间，别的模组在渲染钩子里看到的是那个假世界。** 绑定只发生在一帧渲染之内，
   所以 tick 事件、数据包处理里它们看到的仍是原版的 `null`；但如果某个模组在渲染回调里对
   `mc.level` / `mc.player` 做了很强的假设，理论上可能表现异常。当前不能单独关闭占位世界；

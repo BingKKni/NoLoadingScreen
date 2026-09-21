@@ -7,6 +7,10 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.CommonListenerCookie;
 import net.minecraft.client.multiplayer.LevelLoadTracker;
+import net.minecraft.client.multiplayer.MultiPlayerGameMode;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.ClientRecipeBook;
+import net.minecraft.stats.StatsCounter;
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.Connection;
@@ -40,5 +44,9 @@ public final class SceneFactory {
 		ClientLevel level = new ClientLevel(listener, data, dimension != null ? dimension : Level.OVERWORLD,
 			type, radius, radius, minecraft.levelRenderer, false, 0L, seaLevel);
 		return new Scene(level, listener);
+	}
+
+	public static LocalPlayer createPlayer(final MultiPlayerGameMode gameMode, final ClientLevel level) {
+		return gameMode.createPlayer(level, new StatsCounter(), new ClientRecipeBook());
 	}
 }

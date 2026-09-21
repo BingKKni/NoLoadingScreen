@@ -2,6 +2,7 @@ package io.github.bingkkni.noloadingscreen.platform;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import org.jspecify.annotations.Nullable;
 
 /** 1.21.10 owns meshes and extraction in LevelRenderer; sky/fog query the level directly. */
@@ -11,6 +12,9 @@ public final class SceneRenderer {
 	public static void tickCamera(Minecraft client) {
 		((io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor) client.gameRenderer).nls$tickFov();
 		client.gameRenderer.getMainCamera().tick();
+	}
+	public static void tickHands(Minecraft client, LocalPlayer player) {
+		((io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor) client.gameRenderer).nls$hands().tick();
 	}
 	public static void refreshEnvironment(Minecraft client, ClientLevel level) {
 		// No EnvironmentAttributeProbe cache in this API: LevelRenderer samples the level per frame.

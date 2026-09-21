@@ -18,6 +18,8 @@ public final class LoadingMixinPlugin implements IMixinConfigPlugin {
 
 	@Override
 	public boolean shouldApplyMixin(final String targetClassName, final String mixinClassName) {
+		if (mixinClassName.endsWith(".RetainedCullingMixin")) return io.github.bingkkni.noloadingscreen.platform.LoaderServices.modVersion("entityculling").filter("1.10.5"::equals).isPresent();
+		if (mixinClassName.endsWith(".WaveyCapeLayerMixin")) return io.github.bingkkni.noloadingscreen.compat.WaveyCapesCompatibility.clockHookSupported();
 		return !mixinClassName.startsWith("io.github.bingkkni.noloadingscreen.mixin.Sodium") || SodiumCompatibility.supported();
 	}
 }

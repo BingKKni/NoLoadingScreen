@@ -2,6 +2,7 @@ package io.github.bingkkni.noloadingscreen.platform;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import org.jspecify.annotations.Nullable;
 
 /** 1.21.11 mesh/extraction ownership and camera environment cache. */
@@ -11,6 +12,9 @@ public final class SceneRenderer {
 	public static void tickCamera(Minecraft client) {
 		((io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor) client.gameRenderer).nls$tickFov();
 		client.gameRenderer.getMainCamera().tick();
+	}
+	public static void tickHands(Minecraft client, LocalPlayer player) {
+		((io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor) client.gameRenderer).nls$hands().tick();
 	}
 	public static void refreshEnvironment(Minecraft client, ClientLevel level) {
 		var camera = client.gameRenderer.getMainCamera();

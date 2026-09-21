@@ -5,7 +5,6 @@ import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import com.mojang.authlib.yggdrasil.ProfileResult;
 import io.github.bingkkni.noloadingscreen.DisconnectedWorldView;
 import io.github.bingkkni.noloadingscreen.LocalSkinPreloader;
 import io.github.bingkkni.noloadingscreen.JoinClassWarmup;
@@ -56,7 +55,7 @@ public abstract class MinecraftMixin {
 			|| screen instanceof LevelLoadingScreen || screen instanceof ServerReconfigScreen)) return;
 		WaitFrame.draw(minecraft, advanceGameTime);
 	}
-	@Shadow @Final private CompletableFuture<@Nullable ProfileResult> profileFuture;
+	@Shadow @Final private CompletableFuture<?> profileFuture;
 	@Shadow private @Nullable Connection pendingConnection;
 	@Unique private boolean nls$drainingTasks;
 	@Unique private long nls$taskStart;
@@ -231,23 +230,23 @@ public abstract class MinecraftMixin {
 	@Inject(method = "clearClientLevel", at = @At("HEAD"))
 	private void nls$clearLevelStart(final Screen screen, final CallbackInfo ci) {
 		NoLoadingScreen.onLevelTornDown();
-		NoLoadingScreen.markTimeline("开始拆除旧世界 (clearClientLevel)");
+		NoLoadingScreen.markTimeline("Client world teardown started");
 	}
 
 	@Inject(method = "clearClientLevel", at = @At("RETURN"))
 	private void nls$clearLevelEnd(final Screen screen, final CallbackInfo ci) {
-		NoLoadingScreen.markTimeline("旧世界拆除完毕 <- 这段是客户端自己的开销");
+		NoLoadingScreen.markTimeline("Client world teardown completed");
 	}
 
 	@Inject(method = "setLevel", at = @At("HEAD"))
 	private void nls$setLevelStart(final ClientLevel level, final CallbackInfo ci) {
 		// Hand the render engines back before vanilla points them at the real world.
 		NoLoadingScreen.onLevelTornDown();
-		NoLoadingScreen.markTimeline("开始装配新世界 (setLevel；此前也可能包含客户端拆除和登录处理)");
+		NoLoadingScreen.markTimeline("Client world assembly started");
 	}
 
 	@Inject(method = "setLevel", at = @At("RETURN"))
 	private void nls$setLevelEnd(final ClientLevel level, final CallbackInfo ci) {
-		NoLoadingScreen.markTimeline("新世界装配完毕 <- 这段是客户端自己的开销");
+		NoLoadingScreen.markTimeline("Client world assembly completed");
 	}
 }

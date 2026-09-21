@@ -106,6 +106,22 @@ final class OptimizationCompatibilityVerification {
 		result.put("sodium-extra", Map.of(
 			"net.minecraft.client.renderer.GameRenderer", List.of("nls$preparePlaceholderCamera")
 		));
+		result.put("badoptimizations", Map.of(
+			"net.minecraft.client.particle.ParticleEngine", List.of("nls$captureLocalDebris"),
+			"net.minecraft.client.renderer.extract.LevelExtractor", List.of("nls$extractLocalDebris"),
+			"net.minecraft.client.renderer.entity.EntityRenderDispatcher", List.of("nls$splitEntityClock")
+		));
+		result.put("particle_core", Map.of(
+			"net.minecraft.client.particle.ParticleEngine", List.of("nls$captureLocalDebris", "nls$clearLocalDebris")
+		));
+		result.put("c2me", Map.of(
+			"net.minecraft.client.Options", List.of("nls$smallSyntheticView"),
+			"net.minecraft.client.Minecraft", List.of("nls$dontFreezeWhileServerBoots")
+		));
+		result.put("modernfix", Map.of(
+			"net.minecraft.client.Minecraft", List.of("nls$detachRetainedScene", "nls$disconnect"),
+			"net.minecraft.client.multiplayer.ClientPacketListener", List.of("nls$configurationStarted")
+		));
 		result.put("rrls", Map.of(
 			"net.minecraft.client.Minecraft", List.of("nls$bootWaitFrame"),
 			"net.minecraft.client.gui.Gui", List.of("nls$returnToPlaceholder")

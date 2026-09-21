@@ -1,6 +1,7 @@
 package io.github.bingkkni.noloadingscreen;
 
-import com.mojang.authlib.yggdrasil.ProfileResult;
+import com.mojang.authlib.GameProfile;
+import io.github.bingkkni.noloadingscreen.platform.ProfileLookup;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -20,16 +21,17 @@ public final class LocalSkinPreloader {
 
 	public static void preload(
 		final UUID playerId,
-		final CompletableFuture<@Nullable ProfileResult> profileFuture,
+		final CompletableFuture<?> profileFuture,
 		final SkinManager skinManager,
 		final Executor clientExecutor
 	) {
 		profileId = playerId;
 		skin = profileFuture.thenComposeAsync(result -> {
-			if (result == null || !playerId.equals(result.profile().id())) {
+			GameProfile profile = ProfileLookup.profile(result);
+			if (profile == null || !playerId.equals(profile.id())) {
 				return CompletableFuture.<Optional<PlayerSkin>>completedFuture(Optional.empty());
 			}
-			return skinManager.get(result.profile());
+			return skinManager.get(profile);
 		}, clientExecutor).exceptionally(failure -> {
 			NoLoadingScreen.LOGGER.warn("Could not preload the local player skin; keeping vanilla fallback", failure);
 			return Optional.empty();

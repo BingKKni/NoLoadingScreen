@@ -9,6 +9,7 @@ import io.github.bingkkni.noloadingscreen.SavingWorldView;
 import io.github.bingkkni.noloadingscreen.LoadingWaitLoop;
 import io.github.bingkkni.noloadingscreen.platform.WaitFrame;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.GameRenderer;
@@ -44,6 +45,20 @@ public abstract class DisconnectMixin {
 	)
 	private void nls$showSavingWorld(final Screen screen, final boolean keepResourcePacks, final boolean stopSound, final CallbackInfo ci) {
 		SavingWorldView.install();
+	}
+
+	/**
+	 * A captured scene is shown a few statements after vanilla writes null over this field. Other
+	 * mods scrub whatever level they still find there at that write (ModernFix's world-leak
+	 * mitigation nulls its chunk storage and light engine), which would remove the floor and the
+	 * lighting from the scene about to go up. The HUD reset is the last vanilla reader before that
+	 * write, so the field is detached right after it; the retained level is released by the scene.
+	 */
+	@WrapOperation(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",
+		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/Gui;onDisconnected()V"))
+	private void nls$detachRetainedScene(final Gui gui, final Operation<Void> original) {
+		original.call(gui);
+		if (SavingWorldView.pending() || DisconnectedWorldView.active()) ((Minecraft) (Object) this).level = null;
 	}
 
 	@Redirect(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V",

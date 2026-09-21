@@ -40,6 +40,7 @@ final class EarlyLoadingVerification {
 	static void run() throws ReflectiveOperationException {
 		verifyRegistries();
 		verifyInitialConnection();
+		verifyTimeout();
 		verifyResourceWait();
 		verifyLocalClockAndInput();
 		verifyInputChaining();
@@ -74,6 +75,7 @@ final class EarlyLoadingVerification {
 		ConnectScreenAccessor access = (ConnectScreenAccessor) owner;
 		FakeConnection connection = new FakeConnection();
 		set(ConnectScreen.class, owner, "connection", connection);
+		set(ConnectScreen.class, owner, "status", Component.translatable("connect.connecting"));
 		set(ConnectScreen.class, owner, "parent", allocate(TitleScreen.class));
 		NoLoadingScreen.onScreenChanging(owner);
 		check(NoLoadingScreen.canRevealConfigScreen() && !PlaceholderWorld.active(), "Initial owner is retained before encryption without opening a placeholder");
@@ -133,6 +135,41 @@ final class EarlyLoadingVerification {
 		owner.tick();
 		check(!NoLoadingScreen.canRevealConfigScreen() && connection.ticks == ticks, "Stale aborted status cannot resurrect a placeholder");
 		set(Gui.class, minecraft.gui, "screen", null);
+	}
+
+	private static void verifyTimeout() throws ReflectiveOperationException {
+		Minecraft client = Minecraft.getInstance();
+		ConnectScreen owner = allocate(ConnectScreen.class);
+		FakeConnection connection = new FakeConnection();
+		set(ConnectScreen.class, owner, "connection", connection);
+		set(NoLoadingScreen.class, null, "suppressedConnectScreen", owner);
+		Method timeout = NoLoadingScreen.class.getDeclaredMethod("checkMultiplayerTimeout");
+		timeout.setAccessible(true);
+		try {
+			for (int seconds : new int[]{3, 30, 60}) {
+				NoLoadingScreenConfig.get().multiplayerWaitSeconds = seconds;
+				connection.connected = true;
+				set(NoLoadingScreen.class, null, "multiplayerStartMs", Util.getMillis() - seconds * 1000L + 1000);
+				timeout.invoke(null);
+				check(connection.connected, "No early timeout: " + seconds);
+				set(NoLoadingScreen.class, null, "multiplayerStartMs", Util.getMillis() - seconds * 1000L - 1000);
+				timeout.invoke(null);
+				check(!connection.connected && connection.reason.equals(Component.translatable("disconnect.timeout")), "Configured deadline uses vanilla disconnect reason: " + seconds);
+			}
+			connection.connected = true;
+			NoLoadingScreenConfig.get().multiplayerWaitSeconds = 0;
+			set(NoLoadingScreen.class, null, "multiplayerStartMs", Util.getMillis() - 120_000);
+			timeout.invoke(null);
+			check(connection.connected, "Unlimited does not enforce the old 30-second deadline");
+			NoLoadingScreenConfig.get().multiplayerWaitSeconds = 3;
+			set(Minecraft.class, client, "isLocalServer", true);
+			timeout.invoke(null);
+			check(connection.connected, "Multiplayer timeout never applies to an integrated server");
+		} finally {
+			set(Minecraft.class, client, "isLocalServer", false);
+			NoLoadingScreenConfig.get().multiplayerWaitSeconds = 30;
+			NoLoadingScreen.onDisconnected();
+		}
 	}
 
 	private static void verifyResourceWait() throws ReflectiveOperationException {
@@ -293,10 +330,11 @@ final class EarlyLoadingVerification {
 		boolean connected = true;
 		int ticks;
 		int disconnections;
+		Component reason;
 		FakeConnection() { super(PacketFlow.CLIENTBOUND); }
 		@Override public boolean isConnected() { return connected; }
 		@Override public void tick() { ticks++; }
 		@Override public void handleDisconnection() { disconnections++; }
-		@Override public void disconnect(final Component reason) { connected = false; }
+		@Override public void disconnect(final Component reason) { connected = false; this.reason = reason; }
 	}
 }

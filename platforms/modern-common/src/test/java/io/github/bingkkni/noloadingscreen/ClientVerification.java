@@ -25,6 +25,7 @@ public final class ClientVerification {
             for (var item : config.getAsJsonArray("client")) {
                 String name = item.getAsString();
                 if (name.startsWith("Sodium") && !sodium) continue;
+                if (!new io.github.bingkkni.noloadingscreen.mixin.LoadingMixinPlugin().shouldApplyMixin("", config.get("package").getAsString() + "." + name)) continue;
                 String path = config.get("package").getAsString().replace('.', '/') + '/' + name + ".class";
                 ClassNode node = new ClassNode();
                 try (var bytes = loader.getResourceAsStream(path)) {

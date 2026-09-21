@@ -167,6 +167,7 @@ final class LoadingVisualVerification {
 		try {
 			verifyClocksAndCamera(minecraft, player);
 			verifyAnimations(player);
+			verifyHeadBeforeLoaded(player);
 		} finally {
 			PlaceholderWorld.unbind();
 		}
@@ -190,12 +191,13 @@ final class LoadingVisualVerification {
 
 	private static void verifyFlyingHandoff(final Minecraft minecraft, final LocalPlayer player) throws ReflectiveOperationException {
 		set(PlaceholderWorld.class, null, "synthetic", false);
+		player.getAbilities().mayfly = true;
 		player.getAbilities().flying = true;
 		player.setOnGround(false);
 		player.setDeltaMovement(Vec3.ZERO);
 		minecraft.options.keyJump.setDown(true);
 		invoke(PlaceholderWorld.class, null, "initializeMovement");
-		check(player.getAbilities().flying && player.noPhysics, "Adopted flight survives the real initialization path");
+		check(player.getAbilities().flying && !player.noPhysics, "Adopted flight retains collision without the override");
 		set(Gui.class, minecraft.gui, "screen", allocate(net.minecraft.client.gui.screens.ChatScreen.class));
 		NoLoadingScreenConfig.get().placeholderFreeMove = true;
 		double height = player.getY();
@@ -461,6 +463,35 @@ final class LoadingVisualVerification {
 		check(player.avatarState().getInterpolatedBob(1) < oldBob, "Flight stops walking camera bob");
 	}
 
+	/**
+	 * The window between login and ServerboundPlayerLoadedPacket: vanilla's LocalPlayer.tick returns
+	 * at once, so nothing copies the view into the head yaw. The constructor's random yaw against a
+	 * zero yHeadRotO then renders as a per-tick sawtooth, and the body ignores the camera.
+	 */
+	private static void verifyHeadBeforeLoaded(final LocalPlayer player) throws ReflectiveOperationException {
+		Field loaded = ClientPacketListener.class.getDeclaredField("clientLoaded");
+		loaded.setAccessible(true);
+		loaded.setBoolean(player.connection, false);
+		player.yHeadRot = 3.0F;
+		player.yHeadRotO = 0.0F;
+		player.yBodyRot = 0.0F;
+		player.yBodyRotO = 0.0F;
+		player.setYRot(120.0F);
+		float swing = player.attackAnim;
+		int age = player.tickCount;
+		for (int i = 0; i < 20; i++) NoLoadingScreen.beforePlayerTick(player);
+		check(player.yHeadRot == 120.0F && player.yHeadRotO == 120.0F, "Before the loaded packet the head follows the view without a stale interpolation source");
+		check(Math.abs(Mth.wrapDegrees(player.yHeadRot - player.yBodyRot)) <= 50.01F, "The body turns after the head with vanilla's limit");
+		check(player.attackAnim == swing && player.tickCount == age, "Only rotation bookkeeping runs: no swing, age, movement or packet side effects");
+		player.setYRot(-60.0F);
+		NoLoadingScreen.beforePlayerTick(player);
+		check(player.yHeadRotO == 120.0F && player.yHeadRot == -60.0F, "Each tick keeps one previous head yaw for the renderer's interpolation");
+		loaded.setBoolean(player.connection, true);
+		player.setYRot(0.0F);
+		NoLoadingScreen.beforePlayerTick(player);
+		check(player.yHeadRot == -60.0F, "Once vanilla ticks the player again the hook steps aside");
+	}
+
 	private static void verifyMenuPhysics(final Minecraft minecraft, final LocalPlayer player) throws ReflectiveOperationException {
 		PlaceholderMovement movement = (PlaceholderMovement) get(PlaceholderWorld.class, null, "movement");
 		NoLoadingScreenConfig.get().placeholderFreeMove = true;
@@ -487,14 +518,17 @@ final class LoadingVisualVerification {
 			BlockPos target = new BlockPos(3, 80, 3);
 			BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(target).add(0, .5, 0), Direction.UP, target, false);
 			level.blocks.put(target, Blocks.BEDROCK.defaultBlockState());
-			check(PlaceholderInteraction.breakBlock(player, hit) && level.getBlockState(target).isAir(), "Left action removes even bedrock immediately");
+			check(!PlaceholderInteraction.breakBlock(player, hit), "Survival cannot break bedrock");
+			PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.CREATIVE);
+			check(PlaceholderInteraction.breakBlock(player, hit) && level.getBlockState(target).isAir(), "Creative breaks bedrock immediately");
+			PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 			check(!PlaceholderInteraction.breakBlock(player, hit), "Breaking air is a no-op");
 			level.blocks.put(target, Blocks.STONE.defaultBlockState());
 			player.getInventory().setItem(0, new ItemStack(Items.COBBLESTONE, 8));
 			PlaceholderInteraction.selectSlot(player, 0);
-			player.getAbilities().instabuild = true; // outgoing creative must still consume on place
+			player.getAbilities().instabuild = true; // mode, not a stale ability flag, owns stack consumption
 			check(PlaceholderInteraction.placeBlock(player, InteractionHand.MAIN_HAND, hit), "Right action places a held block");
-			check(level.getBlockState(target.above()).is(Blocks.COBBLESTONE) && player.getMainHandItem().getCount() == 7, "Placement consumes one even with creative abilities");
+			check(level.getBlockState(target.above()).is(Blocks.COBBLESTONE) && player.getMainHandItem().getCount() == 7, "Survival placement consumes one despite stale abilities");
 			check(!PlaceholderInteraction.placeBlock(player, InteractionHand.MAIN_HAND, hit) && player.getMainHandItem().getCount() == 7, "Occupied placement does not consume items");
 			level.blocks.remove(target.above());
 			level.obstructed = true;
@@ -531,7 +565,9 @@ final class LoadingVisualVerification {
 		verifyActionKeys(minecraft, player, level);
 		verifyWheel(minecraft, player);
 		verifyHandSwap(minecraft, player);
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.CREATIVE);
 		PickBlockVerification.run(minecraft, player, level);
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 	}
 
 	private static void verifyActionKeys(final Minecraft minecraft, final LocalPlayer player, final EmptyLevel level) throws ReflectiveOperationException {
@@ -542,6 +578,7 @@ final class LoadingVisualVerification {
 		set(Options.class, minecraft.options, "keyUse", use);
 		set(Options.class, minecraft.options, "keySwapOffhand", swap);
 		level.blocks.clear();
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.CREATIVE);
 		player.setPos(3.5, 80, .5);
 		player.setXRot(0);
 		player.setYRot(0);
@@ -562,6 +599,7 @@ final class LoadingVisualVerification {
 		KeyMapping.click(InputConstants.Type.KEYSYM.getOrCreate(74));
 		PlaceholderWorld.handleSafeKeybinds();
 		check(level.getBlockState(turnedTarget).isAir(), "A fresh vanilla click can break the newly targeted block");
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 		player.setYRot(0);
 		player.setOldPosAndRot();
 		level.blocks.put(target, Blocks.STONE.defaultBlockState());
@@ -822,6 +860,14 @@ final class LoadingVisualVerification {
 		boolean rejectEdits;
 		Map<BlockPos, BlockState> blocks;
 		Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities;
+		List<Entity> localEntities;
+		@Override public <T extends Entity> List<T> getEntitiesOfClass(Class<T> type, AABB box, java.util.function.Predicate<? super T> filter) {
+			return localEntities == null ? List.of() : localEntities.stream().filter(type::isInstance).map(type::cast)
+				.filter(e -> e.getBoundingBox().intersects(box)).filter(filter).toList();
+		}
+		@Override public Entity getEntity(int id) { return localEntities == null ? null : localEntities.stream().filter(e -> e.getId() == id).findFirst().orElse(null); }
+		@Override public void addEntity(Entity entity) { if (localEntities == null) localEntities = new java.util.ArrayList<>(); localEntities.add(entity); }
+		@Override public void destroyBlockProgress(int id, BlockPos pos, int stage) {}
 		private EmptyLevel() { super(null, null, null, null, 2, 2, null, false, 0, 63); }
 		@Override public ChunkAccess getChunk(int x, int z, ChunkStatus status, boolean create) { return null; }
 		@Override public boolean noCollision(Entity entity, AABB box) { return true; }
@@ -834,6 +880,8 @@ final class LoadingVisualVerification {
 			return this.blocks.getOrDefault(pos, Blocks.AIR.defaultBlockState());
 		}
 		@Override public boolean hasChunk(int x, int z) { return !this.chunksMissing && Math.abs(x) <= 2 && Math.abs(z) <= 2; }
+		// Level.isLoaded consults the chunk source this fixture never builds; answer with the same chunk set.
+		@Override public boolean isLoaded(BlockPos pos) { return this.hasChunk(pos.getX() >> 4, pos.getZ() >> 4); }
 		@Override public boolean setBlock(BlockPos pos, BlockState state, int flags, int limit) {
 			if (this.rejectEdits) return false;
 			this.blocks.put(pos.immutable(), state);

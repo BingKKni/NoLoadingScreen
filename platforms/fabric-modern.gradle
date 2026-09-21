@@ -1,15 +1,20 @@
 ext.loaderName = 'Fabric'
-ext.apiSourceRoot = '../minecraft-26.1/src'
+if (!project.ext.has('apiSourceRoot')) ext.apiSourceRoot = '../minecraft-26.1/src'
+if (!project.ext.has('fabricLoaderVersion')) ext.fabricLoaderVersion = '0.19.3'
+if (!project.ext.has('modMenuVersion')) ext.modMenuVersion = '18.0.1'
+// An API family may list shared files it has no counterpart for (an accessor to a field that no
+// longer exists, for example); the family's own files still win by relative path as usual.
+if (!project.ext.has('sharedExcludes')) ext.sharedExcludes = []
 ext.sourceLayers = [fileTree('src/main/java'), fileTree('../fabric-modern/src/main/java'),
-    fileTree(apiSourceRoot + '/main/java'), fileTree('../../src/main/java')]
+    fileTree(apiSourceRoot + '/main/java'), fileTree('../../src/main/java') { exclude sharedExcludes }]
 apply from: '../modern-common.gradle'
 repositories {
     maven { url = 'https://maven.terraformersmc.com/releases/' }
 }
 dependencies {
     minecraft "com.mojang:minecraft:${minecraftVersion}"
-    implementation 'net.fabricmc:fabric-loader:0.19.3'
-    compileOnly 'com.terraformersmc:modmenu:18.0.1'
+    implementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
+    compileOnly "com.terraformersmc:modmenu:${modMenuVersion}"
 }
 processResources {
     inputs.properties([version: project.version, minecraftVersion: minecraftVersion])
@@ -20,18 +25,47 @@ processResources {
 }
 sourceSets.test.java.srcDir '../fabric-modern/src/test/java'
 sourceSets.test.resources.srcDir '../fabric-modern/src/test/resources'
-tasks.register('verifyClient', JavaExec) {
-    group = 'verification'
-    dependsOn testClasses
-    classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
-    systemProperty 'fabric.development', 'true'
-    systemProperty 'java.awt.headless', 'true'
-    systemProperty 'nls.mixinConfig', 'noloadingscreen.mixins.json'
-    systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
-        .collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
-        .join(File.pathSeparator + File.pathSeparator)
-    workingDir layout.buildDirectory.dir('client-verification')
-    doFirst { workingDir.mkdirs() }
+def registerClientVerification(String name, String directory) {
+    tasks.register(name, JavaExec) {
+        group = 'verification'
+        dependsOn testClasses
+        classpath = sourceSets.test.runtimeClasspath
+        mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+        systemProperty 'fabric.development', 'true'
+        systemProperty 'java.awt.headless', 'true'
+        systemProperty 'nls.mixinConfig', 'noloadingscreen.mixins.json'
+        systemProperty 'fabric.classPathGroups', [sourceSets.main.output, sourceSets.test.output]
+            .collect { it.files.collect { file -> file.absolutePath }.join(File.pathSeparator) }
+            .join(File.pathSeparator + File.pathSeparator)
+        workingDir layout.buildDirectory.dir(directory)
+        doFirst { workingDir.mkdirs() }
+    }
+}
+registerClientVerification('verifyClient', 'client-verification')
+registerClientVerification('verifyCompatibility', 'compatibility-verification')
+tasks.named('verifyCompatibility', JavaExec) {
+    description = 'Verify client hooks plus the actual Sodium collectors with supplied unmodified optional mod jars.'
+    systemProperty 'nls.verify.compatibility', 'true'
+    doFirst {
+        def supplied = providers.gradleProperty('compatibilityJars').orNull
+        if (supplied == null || supplied.isBlank()) throw new GradleException('Supply -PcompatibilityJars=/path/to/mod.jar,...')
+        def jars = supplied.split('[,;]', -1).collectMany { token ->
+            def path = file(token.trim())
+            if (token.isBlank() || !path.exists()) throw new GradleException("Missing compatibility jar/path: ${token}")
+            path.isDirectory() ? fileTree(path) { include '*.jar' }.files.toList() : [path]
+        }.unique()
+        if (jars.isEmpty() || jars.any { !it.isFile() || !it.name.endsWith('.jar') }) throw new GradleException('Compatibility inputs must resolve to existing jar files')
+        jars.each { jar ->
+            def digest = java.security.MessageDigest.getInstance('SHA-1')
+            jar.withInputStream { stream ->
+                byte[] bytes = new byte[65536]
+                int count
+                while ((count = stream.read(bytes)) != -1) digest.update(bytes, 0, count)
+            }
+            logger.lifecycle("Compatibility input: ${jar.name} SHA1=${digest.digest().encodeHex()}")
+        }
+        // Fabric loads the exact supplied jars in place; nothing is copied or bundled.
+        systemProperty 'fabric.addMods', jars.collect { it.absolutePath }.join(File.pathSeparator)
+    }
 }
 check.dependsOn verifyClient

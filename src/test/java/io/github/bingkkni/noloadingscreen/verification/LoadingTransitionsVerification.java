@@ -200,8 +200,8 @@ final class LoadingTransitionsVerification {
 		LoadingHud.draw(new io.github.bingkkni.noloadingscreen.gui.LoadingCanvas(graphics), new ProgressTracker());
 		check(graphics.rectangles.size() == 2 && graphics.rectangles.stream().allMatch(r -> r[3] - r[1] == 2),
 			"Only the two progress-bar fills are submitted, never the central chunk rectangle");
-		check(graphics.texts.size() == 2 && graphics.rectangles.getFirst()[1] < 300,
-			"Phase, elapsed text and the bar stay above the old rectangle position");
+		check(graphics.texts.size() == 1 && graphics.rectangles.getFirst()[1] < 300,
+			"Only vanilla status text and its bar remain at the original position");
 	}
 
 	private static void verifyMessage() {
@@ -230,6 +230,7 @@ final class LoadingTransitionsVerification {
 
 	private static void verifyKickWarn(final Minecraft minecraft, final LocalPlayer player,
 		final LoadingVisualVerification.EmptyLevel level, final MultiPlayerGameMode mode) throws ReflectiveOperationException {
+		NoLoadingScreenConfig.get().retainWorldOnKick = true;
 		Hud oldHud = minecraft.gui.hud;
 		Hud hud = allocate(Hud.class);
 		CapturingChat chat = allocate(CapturingChat.class);
@@ -276,7 +277,7 @@ final class LoadingTransitionsVerification {
 				"Failed backend kick is printed immediately on the first tick, not after 600 ticks");
 			check(chat.restores == 1 && get(DisconnectedWorldView.class, null, "chatState") == null,
 				"Vanilla chat history is restored once; the temporary history snapshot is released");
-			check(!NoLoadingScreen.shouldDrawOverlay() && NoLoadingScreen.isLoading(), "Offline scene hides loading progress but still blocks outgoing actions/chat");
+			check(NoLoadingScreen.shouldDrawOverlay() && NoLoadingScreen.isLoading(), "Offline scene shows the vanilla disconnect reason and still blocks outgoing actions/chat");
 			verifyOfflineModes(minecraft, player, mode);
 			set(NoLoadingScreen.class, null, "overlayStartMs", Util.getMillis() - 120_000L);
 			for (int tick = 0; tick < 650; tick++) NoLoadingScreen.tickPlaceholder();
@@ -308,7 +309,10 @@ final class LoadingTransitionsVerification {
 			minecraft.level = level;
 			minecraft.player = player;
 			minecraft.gameMode = mode;
-			check(DisconnectedWorldView.canRetain(), "A normal in-server kick is eligible without a pre-existing loading scene");
+			NoLoadingScreenConfig.get().retainWorldOnKick = false;
+			check(!DisconnectedWorldView.canRetain(), "Kick retention is opt-in");
+			NoLoadingScreenConfig.get().retainWorldOnKick = true;
+			check(DisconnectedWorldView.canRetain(), "An opted-in normal kick is eligible without a pre-existing loading scene");
 			check(!DisconnectedWorldView.begin(disconnected, true), "Protocol transfer itself is not an unexpected kick");
 			check(!DisconnectedWorldView.begin(new GenericMessageScreen(Component.empty()), false), "Normal menu disconnect is not KickWarn");
 			NoLoadingScreenConfig.get().enabled = false;
@@ -341,6 +345,7 @@ final class LoadingTransitionsVerification {
 					"Exceptional disconnection cannot leave a half-owned KickWarn session");
 			}
 		} finally {
+			NoLoadingScreenConfig.get().retainWorldOnKick = false;
 			set(Gui.class, minecraft.gui, "hud", oldHud);
 			set(Minecraft.class, minecraft, "isLocalServer", false);
 			NoLoadingScreenConfig.get().enabled = true;
@@ -366,28 +371,28 @@ final class LoadingTransitionsVerification {
 			for (GameType source : GameType.values()) {
 				check(PlaceholderWorld.bind(), "Bind mode initialization");
 				try {
-					controller.setLocalMode(source);
+					PlaceholderWorld.setLocalMode(source);
 					set(PlayerInfo.class, info, "gameMode", source);
 					player.setInvisible(source == GameType.SPECTATOR);
 				} finally { PlaceholderWorld.unbind(); }
 				boolean flying = player.getAbilities().flying;
 				DisconnectedWorldView.install();
 				check(minecraft.player == null && minecraft.gameMode == null, "Mode conversion restores the unbound session");
-				GameType expected = source == GameType.ADVENTURE || source == GameType.SPECTATOR ? GameType.SURVIVAL : source;
+				GameType expected = source;
 				check(PlaceholderWorld.bind(), "Bind mode assertions");
 				try {
-					check(controller.getPlayerMode() == expected && player.gameMode() == expected && !player.isSpectator(),
+					check(controller.getPlayerMode() == expected && player.gameMode() == expected && player.isSpectator() == (source == GameType.SPECTATOR),
 						"Controller and cached player-mode query agree after KickWarn: " + source);
-					check(player.getAbilities().mayBuild && player.getAbilities().instabuild == (expected == GameType.CREATIVE),
-						"Vanilla abilities follow the converted mode; existing creative mode is untouched");
-					check(player.getAbilities().flying == flying && !player.isInvisible(),
-						"Conversion retains sandbox flight and clears spectator-only invisibility");
+					check(player.getAbilities().mayBuild == (source == GameType.SURVIVAL || source == GameType.CREATIVE)
+						&& player.getAbilities().instabuild == (expected == GameType.CREATIVE), "Retained build permissions match the source mode");
+					check(player.getAbilities().flying == flying && player.isInvisible() == (source == GameType.SPECTATOR),
+						"Retention does not change flight or spectator invisibility");
 					check(info.getGameMode() == source && other.gameMode() == source,
 						"Other players and shared PlayerInfo keep their original mode");
 				} finally { PlaceholderWorld.unbind(); }
 			}
 			check(PlaceholderWorld.bind(), "Bind stale player-info regression");
-			try { controller.setLocalMode(GameType.CREATIVE); } finally { PlaceholderWorld.unbind(); }
+			try { PlaceholderWorld.setLocalMode(GameType.CREATIVE); } finally { PlaceholderWorld.unbind(); }
 			DisconnectedWorldView.install();
 			check(PlaceholderWorld.bind(), "Bind stale player-info assertions");
 			try {
@@ -400,7 +405,7 @@ final class LoadingTransitionsVerification {
 			var oldEffect = effects.put(invisibility, new net.minecraft.world.effect.MobEffectInstance(invisibility, 200));
 			try {
 				check(PlaceholderWorld.bind(), "Bind invisible spectator initialization");
-				try { controller.setLocalMode(GameType.SPECTATOR); } finally { PlaceholderWorld.unbind(); }
+				try { PlaceholderWorld.setLocalMode(GameType.SPECTATOR); } finally { PlaceholderWorld.unbind(); }
 				DisconnectedWorldView.install();
 				check(player.isInvisible() && player.hasEffect(invisibility), "An actual invisibility effect is not stripped by leaving spectator mode");
 			} finally {
@@ -411,7 +416,7 @@ final class LoadingTransitionsVerification {
 			try {
 				check(PlaceholderWorld.bind(), "Bind ordinary loading-mode initialization");
 				try {
-					controller.setLocalMode(GameType.ADVENTURE);
+					PlaceholderWorld.setLocalMode(GameType.ADVENTURE);
 					set(PlayerInfo.class, info, "gameMode", GameType.ADVENTURE);
 				} finally { PlaceholderWorld.unbind(); }
 				DisconnectedWorldView.install();
@@ -424,7 +429,7 @@ final class LoadingTransitionsVerification {
 		} finally {
 			check(PlaceholderWorld.bind(), "Bind mode fixture restoration");
 			try {
-				controller.setLocalMode(previousMode);
+				PlaceholderWorld.setLocalMode(previousMode);
 				player.getAbilities().flying = previousFlying;
 				player.setInvisible(previousInvisible);
 				set(AbstractClientPlayer.class, player, "playerInfo", previousInfo);

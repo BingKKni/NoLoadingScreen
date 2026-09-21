@@ -22,7 +22,6 @@ public final class JoinClassWarmup {
 		"net.minecraft.network.syncher.SynchedEntityData",
 	};
 	private static final String[] VANILLA_TAIL = {
-		"net.minecraft.world.item.alchemy.PotionBrewing",
 		"net.minecraft.stats.RecipeBookSettings",
 		"net.minecraft.client.ClientRecipeBook",
 		"net.minecraft.world.level.border.WorldBorder",

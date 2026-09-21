@@ -33,6 +33,7 @@ def sharedJava = fileTree('../../src/main/java') {
 	exclude '**/platform/ClientRuntime.java', '**/platform/SceneFactory.java', '**/platform/EnvironmentWarmup.java'
 	exclude '**/platform/SceneRenderer.java', '**/platform/PlayerEnvironment.java', '**/platform/WaitFrame.java'
 	exclude '**/platform/LevelAccess.java', '**/platform/InventoryAccess.java', '**/platform/RegistryLoader.java'
+	exclude '**/platform/FrameSurface.java', '**/platform/ClientReadiness.java'
 	exclude '**/gui/LoadingCanvas.java', '**/gui/InventoryScreenAdapter.java'
 	exclude '**/mixin/EntityAccessor.java', '**/mixin/ParticleEngineMixin.java'
 	exclude '**/PlayAddonGuard.java'
@@ -50,6 +51,7 @@ sourceSets.test.java.srcDir '../neoforge-common/src/test/java'
 def sharedTests = fileTree('../../src/test/java') {
 	include '**/PlaceholderMovementTest.java', '**/verification/LoadingWorkVerification.java'
 	include '**/verification/SkinPreloadVerification.java', '**/verification/JoinClassWarmupVerification.java'
+	include '**/verification/RetainedLightQueueVerification.java', '**/verification/SandboxVerification.java'
 	include '**/verification/SodiumQueueVerification.java'
 }
 tasks.named('compileTestJava', JavaCompile) { source sharedTests }

@@ -2,6 +2,7 @@ package io.github.bingkkni.noloadingscreen;
 
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.client.gui.screens.Screen;
@@ -14,11 +15,20 @@ public final class SavingWorldView {
 
 	private SavingWorldView() {}
 
+	static boolean retains(final ClientLevel level) {
+		return outgoing != null && outgoing.level() == level;
+	}
+
 	/** Called after join cleanup, before disconnect closes the listener or resets the camera. */
 	public static void capture() {
 		Minecraft minecraft = Minecraft.getInstance();
 		outgoing = NoLoadingScreenConfig.get().enabled && minecraft.getSingleplayerServer() != null
 			? OutgoingWorld.capture() : null;
+	}
+
+	/** A captured scene that vanilla's teardown has not handed over yet. */
+	public static boolean pending() {
+		return outgoing != null;
 	}
 
 	/** Vanilla has nulled its world, but has not detached the already-built chunk meshes yet. */

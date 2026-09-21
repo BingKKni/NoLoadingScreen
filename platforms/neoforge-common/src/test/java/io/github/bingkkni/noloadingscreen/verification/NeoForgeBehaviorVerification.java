@@ -38,6 +38,7 @@ public final class NeoForgeBehaviorVerification {
 		set(Minecraft.class, client, "gui", allocate(Gui.class));
 		set(Minecraft.class, client, "options", allocate(Options.class));
 		NoLoadingScreenConfig.get().enabled = true;
+		RetainedLightQueueVerification.run();
 		verifyBinding(client);
 		verifyReadiness(client);
 		DisconnectHandoffPolicyVerification.run();

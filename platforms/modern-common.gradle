@@ -43,12 +43,20 @@ jar {
 repositories { mavenCentral() }
 dependencies { compileOnly 'org.jspecify:jspecify:1.0.0' }
 sourceSets.test.java.srcDir '../modern-common/src/test/java'
+// Test fixtures follow the same rule as sources: an API family's test file wins over the shared one.
+// The root family's fixtures are the shared ones themselves, so it contributes nothing extra here.
+def apiTestRoot = file(apiSourceRoot + '/test/java')
+def apiTests = apiTestRoot.canonicalFile == file('../../src/test/java').canonicalFile ? fileTree(apiTestRoot) { exclude '**' } : fileTree(apiTestRoot)
+def apiTestPaths = [] as Set
+apiTests.visit { entry -> if (!entry.directory) apiTestPaths << entry.relativePath.pathString }
 def sharedTests = fileTree('../../src/test/java') {
     include '**/PlaceholderMovementTest.java', '**/verification/SkinPreloadVerification.java'
     include '**/verification/SkinTestTexture.java', '**/verification/JoinClassWarmupVerification.java'
-    include '**/verification/SodiumQueueVerification.java'
+    include '**/verification/RetainedLightQueueVerification.java', '**/verification/SandboxVerification.java'
+    include '**/verification/SodiumQueueVerification.java', '**/verification/PlayerFixture.java'
+    exclude { entry -> apiTestPaths.contains(entry.relativePath.pathString) }
 }
-tasks.named('compileTestJava', JavaCompile) { source sharedTests }
+tasks.named('compileTestJava', JavaCompile) { source sharedTests; source apiTests }
 sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
 sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
 test { failOnNoDiscoveredTests = false }

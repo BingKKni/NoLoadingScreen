@@ -42,7 +42,7 @@ jobs:
           MOD_VERSION: ${{ needs.version.outputs.value }}
         run: |
           count=$(find release-artifacts -maxdepth 1 -name "NoLoadingScreen-${MOD_VERSION}-*.jar" | wc -l)
-          test "$count" -eq 28
+          test "$count" -eq 30
 
       - name: publish release
         uses: softprops/action-gh-release@v3

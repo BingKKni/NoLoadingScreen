@@ -134,7 +134,9 @@ final class BlockFeedbackVerification {
 				"Waterlogged break preserves water while feedback uses the removed solid state");
 			PlaceholderBlockEffects.clear();
 			level.blocks.put(pos, Blocks.BARRIER.defaultBlockState());
+			PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.CREATIVE);
 			check(PlaceholderInteraction.breakBlock(player, hit) && group() == null, "Blocks suppressing terrain particles retain vanilla suppression");
+			PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 
 			int soundsBefore = audio.played.size();
 			level.blocks.put(pos, Blocks.STONE.defaultBlockState());
@@ -206,7 +208,20 @@ final class BlockFeedbackVerification {
 			// Missing chunks use vanilla's full-bright particle fallback; no light engine/GPU needed.
 			level.chunksMissing = true;
 			Camera camera = minecraft.gameRenderer.mainCamera();
-			engine.extract(rendered, frustum, camera, 1);
+			// Debris is appended at the extractor's call site, after the engine's own extraction, so
+			// an optimizer returning early from an empty engine cannot drop it.
+			java.lang.reflect.Method extract = java.util.Arrays.stream(net.minecraft.client.renderer.extract.LevelExtractor.class.getDeclaredMethods())
+				.filter(m -> m.getName().contains("nls$extractLocalDebris") && m.getParameterCount() == 6
+					&& m.getParameterTypes()[5] == com.llamalad7.mixinextras.injector.wrapoperation.Operation.class).findFirst().orElseThrow();
+			extract.setAccessible(true);
+			java.util.List<Object> forwarded = new ArrayList<>();
+			com.llamalad7.mixinextras.injector.wrapoperation.Operation<Void> original = args -> {
+				forwarded.addAll(java.util.Arrays.asList(args));
+				((ParticleEngine) args[0]).extract((ParticlesRenderState) args[1], (Frustum) args[2], (Camera) args[3], (float) args[4]);
+				return null;
+			};
+			extract.invoke(allocate(net.minecraft.client.renderer.extract.LevelExtractor.class), engine, rendered, frustum, camera, 1.0F, original);
+			check(forwarded.equals(java.util.List.of(engine, rendered, frustum, camera, 1.0F)), "Vanilla particle extraction keeps its exact receiver and arguments");
 			check(rendered.particles.size() == 2 && audio.camera == camera, "Actual extraction appends local debris and updates the save-time audio listener");
 			QuadParticleRenderState quads = (QuadParticleRenderState) rendered.particles.getLast();
 			Map<?, ?> layers = (Map<?, ?>) get(QuadParticleRenderState.class, quads, "particles");
@@ -252,6 +267,7 @@ final class BlockFeedbackVerification {
 			set(Minecraft.class, minecraft, "modelManager", models);
 			PlaceholderBlockEffects.clear();
 		}
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.CREATIVE);
 		for (int i = 0; i < 70; i++) {
 			level.blocks.put(pos, Blocks.BARRIER.defaultBlockState()); // sound-only, no unnecessary particles
 			PlaceholderInteraction.breakBlock(player, hit);
@@ -259,6 +275,7 @@ final class BlockFeedbackVerification {
 		check(audio.active.size() == 64, "Long held attacks bound owned sound instances and stop the oldest voices");
 		PlaceholderBlockEffects.clear();
 		check(audio.active.isEmpty(), "Ending the effect scope stops every remaining owned voice");
+		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 	}
 
 	static void seedSavingFeedback(final LocalPlayer player, final ClientLevel level) {

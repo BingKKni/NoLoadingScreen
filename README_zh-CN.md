@@ -8,7 +8,7 @@
 [English](README.md) | **简体中文**
 
 [![build](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml/badge.svg)](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml)
-[![Minecraft](https://img.shields.io/badge/Minecraft-26.1.x%20%7C%2026.2%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](docs/VERSIONS.md)
+[![Minecraft](https://img.shields.io/badge/Minecraft-26.1.x%20%7C%2026.2%20%7C%2026.3%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](docs/VERSIONS.md)
 [![Loaders](https://img.shields.io/badge/Loader-Fabric%20%2F%20NeoForge%20%2F%20Forge-dbd0b4)](docs/VERSIONS.md)
 [![Environment](https://img.shields.io/badge/Environment-Client-blue)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -25,7 +25,7 @@ NoLoadingScreen 是一个仅客户端运行的 Forge /Fabric / NeoForge Mod。�
 
 - 用可自由观察的虚空占位世界替代加载页面和黑屏
 - 跨服时保留刚刚离开的世界，直到新世界到达
-- 切服失败、被踢或意外断线后不退出当前世界，直到您按 Esc → 主动断开连接
+- 可选择在被踢或意外断线后保留当前世界，默认关闭
 
 ## 安装
 
@@ -37,10 +37,11 @@ NoLoadingScreen 是一个仅客户端运行的 Forge /Fabric / NeoForge Mod。�
 | 26.1.1 | Fabric / NeoForge（Beta）/ Forge | 25 |
 | 26.1.2 | Fabric / NeoForge / Forge | 25 |
 | 26.2 | Fabric / NeoForge / Forge | 25 |
+| 26.3 | Fabric（NeoForge 与 Forge 尚未发布 26.3 构建）| 25 |
 | 1.21.10 | NeoForge 21.10.64 | 21 |
 | 1.21.11 | NeoForge 21.11.45 | 21 |
 
-加载器精确版本与各版本产物见[版本矩阵](docs/VERSIONS.md)。Fabric 要求 Loader >=0.19.3。
+加载器精确版本与各版本产物见[版本矩阵](docs/VERSIONS.md)。Fabric 要求 Loader >=0.19.3（26.3 以 0.19.5 构建和测试）。
 
 1. 安装对应版本的 [Fabric Loader](https://fabricmc.net/use/installer)、[NeoForge](https://neoforged.net/) 或 [Forge](https://files.minecraftforge.net/)。
 2. 从 [Releases](https://github.com/BingKKni/NoLoadingScreen/releases) 获取匹配产物，或按[支持与构建矩阵](docs/VERSIONS.md)自行构建。所有发布 JAR 都使用 `NoLoadingScreen-版本-加载器-Minecraft版本.jar` 格式，例如 `NoLoadingScreen-1.1.0-Fabric-26.2.jar`。
@@ -57,18 +58,20 @@ Fabric 可选安装 [Mod Menu](https://modrinth.com/mod/modmenu)；NeoForge 和 
 | 选项 | 默认值 | 说明 |
 |:--|:--:|:--|
 | 启用 Mod | 开 | 总开关；关闭后恢复原版行为 |
-| 允许加载时移动 | 开 | 占位世界中行走、疾跑、空格跳跃；双击空格切换飞行，飞行时空格上升、Shift 下降并允许穿墙 |
-| 加载信息浮层 | 开 | 加载期间在 HUD 上显示阶段、耗时和进度 |
-| 显示进图耗时 | 关 | 进图后在聊天框显示总耗时和分段明细 |
+| 允许加载时移动 | 开 | 行走、疾跑、跳跃；飞行保留进入前的服务器权限 |
+| 允许飞行和穿墙 | 关 | 允许在占位世界内飞行，且在飞行时可穿墙 |
+| 加载信息浮层 | 开 | 是否保留原版进度条和进度文字 |
+| 被踢时保留占位世界 | 关 | 被踢或意外断线后保留本地场景 |
+| 多人游戏最长等待时间 | 30 秒 | 3–60 秒或无限等待 |
 
 ## 兼容性
 
-NeoForge 1.21.10 /1.21.11 对应 Sodium 0.7.3 /0.8.14、ViaForge 4.3.1 / 4.3.2；已完成实际测试。可选优化模组矩阵、精确版本、构建命令和验证限制见[NeoForge 说明](docs/NEOFORGE.md)。
 
 以下原有结果针对 **Fabric 26.2**：
 
 - Mod 与 Sodium `0.9.2+mc26.2`, `ViaFabricPlus 4.6.1`, `ViaFabricPlus 5.0.1` 做了兼容处理，其他 Minecraft 版本或 Mod 版本不保证兼容。
-- 受测试的 Mod 还有: Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.3、RRLS 5.2.8。
+- Sodium 私有调度钩子按目标对精确验证过的版本启用：`0.9.2+mc26.3`（Fabric 26.3）、`0.9.2+mc26.1.2`（Fabric/NeoForge 26.1.2）、`0.8.9+mc26.1.1`（Fabric/NeoForge 26.1 与 26.1.1）、`0.9.2+mc26.2`（Fabric/NeoForge 26.2）。
+- 受测试的 Mod 还有: Iris 1.11.4、ImmediatelyFast 1.16.4、Lithium 0.25.3、FerriteCore 9.0.0、EntityCulling 1.10.5、MoreCulling 1.8.1、Dynamic FPS 3.11.9、Sodium Extra 0.9.4、BadOptimizations 2.4.1、Particle Core 0.3.3、ModernFix 5.27.22（NeoForge 26.1.2）、RRLS 5.2.8。
 
 ## 已知行为
 

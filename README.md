@@ -8,7 +8,7 @@
 **English** | [简体中文](README_zh-CN.md)
 
 [![build](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml/badge.svg)](https://github.com/BingKKni/NoLoadingScreen/actions/workflows/build.yml)
-[![Minecraft](https://img.shields.io/badge/Minecraft-26.1.x%20%7C%2026.2%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](docs/VERSIONS.md)
+[![Minecraft](https://img.shields.io/badge/Minecraft-26.1.x%20%7C%2026.2%20%7C%2026.3%20%7C%201.21.10%20%7C%201.21.11-brightgreen)](docs/VERSIONS.md)
 [![Loaders](https://img.shields.io/badge/Loader-Fabric%20%2F%20NeoForge%20%2F%20Forge-dbd0b4)](docs/VERSIONS.md)
 [![Environment](https://img.shields.io/badge/Environment-Client-blue)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -25,7 +25,7 @@ NoLoadingScreen is a client-only Forge / Fabric / NeoForge mod. It hides Minecra
 
 - Replaces loading screens and black frames with a free-look void placeholder!
 - Keeps the world you just left visible while switching servers!
-- Failed switches, kicks, and unexpected disconnects no longer force you out of the current world!
+- Optionally retain the world after a kick or unexpected disconnect (off by default).
 
 ## Installation
 
@@ -37,10 +37,11 @@ Choose the matching build; **JARs for different loaders or game versions must no
 | 26.1.1 | Fabric / NeoForge (Beta) / Forge | 25 |
 | 26.1.2 | Fabric / NeoForge / Forge | 25 |
 | 26.2 | Fabric / NeoForge / Forge | 25 |
+| 26.3 | Fabric (NeoForge and Forge have not published 26.3 builds yet) | 25 |
 | 1.21.10 | NeoForge 21.10.64 | 21 |
 | 1.21.11 | NeoForge 21.11.45 | 21 |
 
-Pinned loader versions and artifacts for each version are listed in the [version matrix](docs/VERSIONS.md). Fabric requires Loader >=0.19.3.
+Pinned loader versions and artifacts for each version are listed in the [version matrix](docs/VERSIONS.md). Fabric requires Loader >=0.19.3 (26.3 was built and tested with 0.19.5).
 
 1. Install [Fabric Loader](https://fabricmc.net/use/installer), [NeoForge](https://neoforged.net/), or [Forge](https://files.minecraftforge.net/) for your target.
 2. Obtain the matching artifact from [Releases](https://github.com/BingKKni/NoLoadingScreen/releases), or build it using the [support/build matrix](docs/VERSIONS.md). All release JARs use the `NoLoadingScreen-version-loader-minecraft.jar` format, for example `NoLoadingScreen-1.1.0-Fabric-26.2.jar`.
@@ -57,9 +58,11 @@ Open the settings screen through Fabric Mod Menu, the NeoForge Mod list, or the 
 | Option | Default | Description |
 |:--|:--:|:--|
 | Enable Mod | On | Master switch; disabling it restores vanilla behavior |
-| Allow Movement While Loading | On | Walk, sprint, and jump in the placeholder world; double-tap Space to toggle flight, then use Space to ascend, Shift to descend, and move through blocks |
-| In-World Loading Overlay | On | Shows the loading phase, elapsed time, and progress on the HUD |
-| Show Join Time | Off | Prints total and per-phase join times in chat after entering the world |
+| Move While Loading | On | Walk, sprint and jump |
+| Flight & Noclip | Off | Override flight permissions locally; pass through walls only while flying |
+| Loading Overlay | On | Vanilla status text and progress bar |
+| Keep World on Kick | Off | Keep a disposable scene after an unexpected multiplayer disconnect |
+| Server Join Timeout | 30 s | 3–60 seconds or Unlimited |
 
 ## Compatibility
 
@@ -68,7 +71,8 @@ NeoForge 1.21.10 / 1.21.11 use Sodium 0.7.3 / 0.8.14 and ViaForge 4.3.1 / 4.3.2;
 The following existing results concern **Fabric 26.2**:
 
 - Compatibility has been tested with Sodium `0.9.2+mc26.2`, ViaFabricPlus `4.6.1`, and ViaFabricPlus `5.0.1`; compatibility with other Minecraft or mod versions is not guaranteed.
-- Other tested mods include Iris 1.11.4, ImmediatelyFast 1.16.4, Lithium 0.25.3, FerriteCore 9.0.0, EntityCulling 1.10.5, MoreCulling 1.8.1, Dynamic FPS 3.11.9, Sodium Extra 0.9.3, and RRLS 5.2.8.
+- Sodium's private scheduling hooks are enabled per target for the exact verified build: `0.9.2+mc26.3` (Fabric 26.3), `0.9.2+mc26.1.2` (Fabric/NeoForge 26.1.2), `0.8.9+mc26.1.1` (Fabric/NeoForge 26.1 and 26.1.1) and `0.9.2+mc26.2` (Fabric/NeoForge 26.2). Other builds keep Sodium's native scheduling.
+- Other tested mods include Iris 1.11.4, ImmediatelyFast 1.16.4, Lithium 0.25.3, FerriteCore 9.0.0, EntityCulling 1.10.5, MoreCulling 1.8.1, Dynamic FPS 3.11.9, Sodium Extra 0.9.4, BadOptimizations 2.4.1, Particle Core 0.3.3, ModernFix 5.27.22 (NeoForge 26.1.2) and RRLS 5.2.8.
 
 ## Known Behavior
 

@@ -9,6 +9,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LocalPlayer.class)
 public abstract class LocalPlayerMixin {
+	/**
+	 * Vanilla skips the whole tick until {@code ServerboundPlayerLoadedPacket} has been sent. With
+	 * the loading screen gone that window is on screen, so the visible head/body have to follow
+	 * the view in it.
+	 */
+	@Inject(method = "tick", at = @At("HEAD"))
+	private void nls$followViewBeforeLoaded(final CallbackInfo ci) {
+		NoLoadingScreen.beforePlayerTick((LocalPlayer) (Object) this);
+	}
+
 	@Inject(method = "aiStep", at = @At("HEAD"))
 	private void nls$prepareHold(final CallbackInfo ci) {
 		NoLoadingScreen.beforePlayerAiStep((LocalPlayer) (Object) this);

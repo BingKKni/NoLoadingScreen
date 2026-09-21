@@ -60,7 +60,7 @@ public abstract class GuiMixin {
 
 	@WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/screens/Screen;tick()V"))
 	private void nls$tickLocalInventory(final Screen screen, final Operation<Void> original) {
-		if (!(screen instanceof LoadingInventoryScreen)) {
+		if (!(screen instanceof LoadingInventoryScreen || screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen)) {
 			original.call(screen);
 			return;
 		}

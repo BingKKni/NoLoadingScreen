@@ -2,14 +2,13 @@ package io.github.bingkkni.noloadingscreen;
 
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import io.github.bingkkni.noloadingscreen.mixin.DisconnectedScreenAccessor;
-import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
@@ -20,6 +19,10 @@ public final class DisconnectedWorldView {
 	private static ChatComponent.@Nullable State chatState;
 
 	private DisconnectedWorldView() {}
+
+	static boolean retains(final ClientLevel level) {
+		return outgoing != null && outgoing.level() == level;
+	}
 
 	public static boolean active() {
 		return fallback != null;
@@ -32,7 +35,7 @@ public final class DisconnectedWorldView {
 	/** An intentional exit/transfer and all integrated-server paths remain vanilla. */
 	public static boolean canRetain() {
 		Minecraft minecraft = Minecraft.getInstance();
-		return NoLoadingScreenConfig.get().enabled && !active() && !minecraft.isLocalServer()
+		return NoLoadingScreenConfig.get().enabled && NoLoadingScreenConfig.get().retainWorldOnKick && !active() && !minecraft.isLocalServer()
 			&& minecraft.getSingleplayerServer() == null && !SavingWorldView.saving() && !NoLoadingScreen.preparingResources()
 			&& (PlaceholderWorld.active() || minecraft.level != null && minecraft.player != null);
 	}
@@ -56,22 +59,6 @@ public final class DisconnectedWorldView {
 			var registries = PlaceholderRegistries.ready();
 			if (registries != null) PlaceholderWorld.synthesise(registries, null, null, null,
 				new Vec3(0.5, 80, 0.5), 0, 0, false);
-		}
-		if (PlaceholderWorld.bind()) {
-			try {
-				Minecraft minecraft = Minecraft.getInstance();
-				GameType mode = minecraft.gameMode.getPlayerMode();
-				if (mode == GameType.ADVENTURE || mode == GameType.SPECTATOR) {
-					// Vanilla updates build permissions and abilities without sending a packet.
-					// Keep the sandbox's inherited flight; its controls still own flight/noclip.
-					boolean flying = minecraft.player.getAbilities().flying;
-					minecraft.gameMode.setLocalMode(GameType.SURVIVAL);
-					minecraft.player.getAbilities().flying = flying;
-					// Spectator invisibility was synchronized separately from game mode. Restore
-					// vanilla's effect-based visibility, without stripping an invisibility potion.
-					if (mode == GameType.SPECTATOR) ((LivingEntityAccessor) minecraft.player).nls$updateInvisibilityStatus();
-				}
-			} finally { PlaceholderWorld.unbind(); }
 		}
 	}
 

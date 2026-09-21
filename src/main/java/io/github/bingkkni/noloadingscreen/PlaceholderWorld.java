@@ -9,12 +9,10 @@ import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
 import net.minecraft.client.gui.screens.ChatScreen;
 import io.github.bingkkni.noloadingscreen.mixin.AvatarAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.ClientCommonPacketListenerImplAccessor;
-import io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.EntityAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.LocalPlayerAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.PlayerAccessor;
-import net.minecraft.client.ClientRecipeBook;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.KeyMapping;
@@ -33,7 +31,6 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.stats.StatsCounter;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Pose;
@@ -89,9 +86,9 @@ import org.jspecify.annotations.Nullable;
  *       {@code aiStep} and the position-reporting code never run once. Its movement is this class
  *       writing coordinates directly.</li>
  *   <li>It is thrown away whole when {@code handleLogin} arrives, and vanilla then builds the real
- *       player at the vanilla moment with the server's own position and rotation. Nothing the camera
- *       did can survive into the session, so the server has nothing to disagree with and no
- *       correction to send.</li>
+ *       player at the vanilla moment with the server's own position and rotation. Only relative cape animation is handed over. Camera movement, inventory edits and
+ *       abilities never survive into the session, so there is no local gameplay state for the
+ *       server to correct.</li>
  *   <li>Binding is per-frame: {@code minecraft.level} / {@code player} / {@code gameMode} are only
  *       assigned only around rendering, input/UI initialization and our local visual/movement
  *       update, then set back before vanilla ticks entities or connections.</li>
@@ -130,6 +127,58 @@ public final class PlaceholderWorld {
 	private static final PlaceholderControls controls = new PlaceholderControls();
 	private static final PlaceholderInteraction interaction = new PlaceholderInteraction();
 	private static double syntheticFloor;
+	private static boolean inheritedMayfly;
+	private static boolean flightOverride;
+	private static net.minecraft.world.level.GameType localMode = net.minecraft.world.level.GameType.SURVIVAL;
+
+	public static net.minecraft.world.level.GameType localMode() { return localMode; }
+
+	/** Local command only; gameMode.setLocalMode does not send a command/ability packet. */
+	public static boolean setLocalMode(final net.minecraft.world.level.GameType mode) {
+		if (!bind()) return false;
+		try {
+			gameMode.setLocalMode(mode);
+			localMode = mode;
+			inheritedMayfly = player.getAbilities().mayfly;
+			controls.setFlying(player.getAbilities().flying);
+			flightOverride = false;
+			applyFlightPolicy(player);
+			((LivingEntityAccessor) player).nls$updateInvisibilityStatus();
+			if (mode == net.minecraft.world.level.GameType.SPECTATOR) player.setInvisible(true);
+			interaction.stopBreaking(player);
+			interaction.reset();
+			return true;
+		} finally { unbind(); }
+	}
+
+	public static java.util.List<String> playerNames() {
+		if (level == null) return java.util.List.of();
+		return level.players().stream().filter(p -> p != player && !p.isRemoved()).map(p -> p.getGameProfile().name()).toList();
+	}
+
+	public static boolean teleportToPlayer(final String name) {
+		if (localMode != net.minecraft.world.level.GameType.SPECTATOR || !bind()) return false;
+		try {
+			for (var target : level.players()) {
+				if (target != player && !target.isRemoved() && target.getGameProfile().name().equals(name)) {
+					player.setPos(target.position());
+					movement.reset(target.getX(), target.getY(), target.getZ(), 0, 0, 0, false);
+					return true;
+				}
+			}
+			return false;
+		} finally { unbind(); }
+	}
+
+	private static void applyFlightPolicy(final LocalPlayer localPlayer) {
+		boolean override = NoLoadingScreenConfig.get().allowFlightAndNoclip;
+		localPlayer.getAbilities().mayfly = inheritedMayfly || override;
+		if (override && !flightOverride) controls.setFlying(true);
+		flightOverride = override;
+		controls.restrictFlight(localPlayer.getAbilities().mayfly);
+		localPlayer.getAbilities().flying = controls.flying();
+		localPlayer.noPhysics = localMode == net.minecraft.world.level.GameType.SPECTATOR || override && controls.flying();
+	}
 
 	// What was in Minecraft's three fields before the outermost bind, put back by the matching
 	// unbind. Saved rather than assumed null: vanilla's teardown clears them one at a time —
@@ -140,6 +189,14 @@ public final class PlaceholderWorld {
 	private static @Nullable MultiPlayerGameMode savedGameMode;
 
 	private PlaceholderWorld() {
+	}
+
+	public static void captureCape() {
+		if (installed && player != null) {
+			// Restore the simulation position, not the most recent render interpolation.
+			player.setPos(movement.x(1), movement.y(1), movement.z(1));
+			CapeContinuity.capture(player);
+		}
 	}
 
 	public static boolean syntheticActive() {
@@ -153,7 +210,7 @@ public final class PlaceholderWorld {
 	/** Local mutations require both the correct disposable player and its scoped binding. */
 	public static boolean owns(final LocalPlayer candidate) {
 		Minecraft minecraft = Minecraft.getInstance();
-		return installed && candidate == player && level != null && minecraft.level == level && minecraft.player == candidate;
+		return installed && candidate != null && candidate == player && level != null && minecraft.level == level && minecraft.player == candidate;
 	}
 
 	/** A synthetic listener has no PlayerInfo; adopted and real players keep vanilla's lookup. */
@@ -194,6 +251,11 @@ public final class PlaceholderWorld {
 		final @Nullable MultiPlayerGameMode oldGameMode,
 		final boolean dismissScreen
 	) {
+		return adopt(oldLevel, oldPlayer, oldGameMode, dismissScreen, null);
+	}
+
+	static boolean adopt(final ClientLevel oldLevel, final LocalPlayer oldPlayer,
+		final @Nullable MultiPlayerGameMode oldGameMode, final boolean dismissScreen, final @Nullable PlaceholderPermissions permissions) {
 		if (installed) {
 			return true;
 		}
@@ -212,6 +274,10 @@ public final class PlaceholderWorld {
 			return false;
 		}
 
+		PlaceholderPermissions inheritedPermissions = permissions != null ? permissions : PlaceholderPermissions.capture(oldPlayer, oldGameMode);
+		// Direct handoffs also retire deferred packet work before the first local bind. Never
+		// restore this queue on uninstall: this level cannot become a live network world again.
+		((RetainedLightQueue) oldLevel).nls$retireLightQueue();
 		level = oldLevel;
 		player = oldPlayer;
 		// clearClientLevel nulls Minecraft#gameMode a few statements before Minecraft#level, so the
@@ -225,6 +291,8 @@ public final class PlaceholderWorld {
 		try {
 			// The listener is kept, but its line to the server is cut first: see the accessor.
 			((ClientCommonPacketListenerImplAccessor) oldPlayer.connection).nls$setConnection(deadConnection());
+			if (!bind()) throw new IllegalStateException("Cannot restore placeholder permissions");
+			try { inheritedPermissions.apply(oldPlayer); } finally { unbind(); }
 			initializeMovement();
 
 			// clearClientLevel calls gameRenderer.resetData(), which resets the camera; these two put
@@ -358,7 +426,7 @@ public final class PlaceholderWorld {
 		// already defaults to GameType.DEFAULT_MODE — survival, which is what we want anyway.
 		gameMode = new MultiPlayerGameMode(minecraft, listener);
 
-		LocalPlayer localPlayer = gameMode.createPlayer(level, new StatsCounter(), new ClientRecipeBook());
+		LocalPlayer localPlayer = SceneFactory.createPlayer(gameMode, level);
 		localPlayer.input = new KeyboardInput(minecraft.options);
 		// Entity#id starts at 0 and Entity#getId throws until it is assigned — which ClientLevel
 		// #addEntity does immediately. Vanilla assigns the server's id in handleLogin just before
@@ -411,10 +479,13 @@ public final class PlaceholderWorld {
 		client.options.keyAttack.setDown(false);
 		client.options.keyUse.setDown(false);
 		discardQueuedClicks();
-		if (ClientUi.screen(client) instanceof LoadingInventoryScreen || ClientUi.screen(client) instanceof LoadingPauseScreen
+		if (ClientUi.screen(client) instanceof LoadingInventoryScreen || ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || ClientUi.screen(client) instanceof LoadingPauseScreen
 			|| ClientUi.screen(client) instanceof ChatScreen) ClientUi.setScreen(client, null);
 		releaseAll();
 		PlaceholderBlockEffects.clear();
+		PlaceholderItems.clear();
+		PlaceholderVisuals.clearHits();
+		PlaceholderEquipment.clear();
 		installed = false;
 		synthetic = false;
 		Minecraft minecraft = Minecraft.getInstance();
@@ -565,6 +636,7 @@ public final class PlaceholderWorld {
 		try {
 			syncAppearance(player);
 			resetMovement(player);
+			io.github.bingkkni.noloadingscreen.compat.WaveyCapesCompatibility.tick(player);
 		} finally {
 			unbind();
 		}
@@ -583,8 +655,14 @@ public final class PlaceholderWorld {
 	}
 
 	private static void resetMovement(final LocalPlayer localPlayer) {
+		interaction.stopBreaking(localPlayer);
 		interaction.reset();
+		PlaceholderItems.clear();
 		PlaceholderBlockEffects.clear();
+		localMode = gameMode.getPlayerMode();
+		inheritedMayfly = localPlayer.getAbilities().mayfly;
+		flightOverride = false;
+		PlaceholderEquipment.reset(localPlayer);
 		Vec3 velocity = localPlayer.getDeltaMovement();
 		movement.reset(localPlayer.getX(), localPlayer.getY(), localPlayer.getZ(), velocity.x, velocity.y, velocity.z, localPlayer.onGround());
 		walkingSpeed = localPlayer.getAttributeValue(Attributes.MOVEMENT_SPEED);
@@ -595,7 +673,7 @@ public final class PlaceholderWorld {
 		// foot. Captured held keys are not new taps and must not toggle the inherited state.
 		controls.reset(localPlayer.isSprinting(), localPlayer.getAbilities().flying,
 			minecraft.options.keyUp.isDown(), minecraft.options.keyJump.isDown());
-		localPlayer.noPhysics = controls.flying();
+		applyFlightPolicy(localPlayer);
 		// stopFallFlying briefly SETS the flag before clearing it, which starts an elytra sound
 		// even on a newly constructed standing player if called unconditionally.
 		if (localPlayer.isFallFlying()) localPlayer.stopFallFlying();
@@ -638,10 +716,11 @@ public final class PlaceholderWorld {
 		boolean shiftDown = inputEnabled && minecraft.options.keyShift.isDown();
 		controls.tick(forwardDown, backwardDown, jumpDown, shiftDown,
 			inputEnabled && minecraft.options.keySprint.isDown(), minecraft.options.sprintWindow().get(), inputEnabled);
+		applyFlightPolicy(localPlayer);
 		boolean flying = controls.flying();
-		localPlayer.getAbilities().flying = flying;
-		localPlayer.noPhysics = flying;
 		localPlayer.setSprinting(controls.sprinting());
+		PlaceholderEquipment.update(localPlayer);
+		walkingSpeed = localPlayer.getAttributeValue(Attributes.MOVEMENT_SPEED) / (localPlayer.isSprinting() ? 1.3 : 1);
 		localPlayer.input.tick();
 		if (!inputEnabled) localPlayer.input.keyPresses = net.minecraft.world.entity.player.Input.EMPTY;
 		// Render interpolation must never become the origin for the next physics/collision query.
@@ -662,7 +741,7 @@ public final class PlaceholderWorld {
 		movement.tick(
 			forward * inputScale, strafe * inputScale,
 			axis(jumpDown, shiftDown), localPlayer.getYRot(), physics, flying, controls.sprinting(), jumpDown,
-			simulate, synthetic ? syntheticFloor : placeholderLevel.getMinY(), placeholderLevel.getMaxY(), requested -> {
+			simulate, synthetic ? syntheticFloor : placeholderLevel.getMinY(), placeholderLevel.getMaxY(), localPlayer.noPhysics, requested -> {
 				Vec3 delta = new Vec3(requested.x(), requested.y(), requested.z());
 				delta = ((PlayerAccessor) localPlayer).nls$backOffFromEdge(delta, MoverType.SELF);
 				delta = ((EntityAccessor) localPlayer).nls$collide(delta);
@@ -677,8 +756,12 @@ public final class PlaceholderWorld {
 			movement.x(1) - movement.x(0), movement.y(1) - movement.y(0), movement.z(1) - movement.z(0));
 		tickArmRotation(localPlayer);
 		SceneRenderer.tickCamera(minecraft);
-		((GameRendererAccessor) minecraft.gameRenderer).nls$hands().tick();
+		SceneRenderer.tickHands(minecraft, localPlayer);
 		interaction.tick();
+		if (!minecraft.options.keyAttack.isDown() || ClientUi.screen(minecraft) != null
+			|| ClientUi.overlay(minecraft) != null || !minecraft.isWindowActive()) interaction.stopBreaking(localPlayer);
+		else interaction.continueAttack(localPlayer);
+		PlaceholderItems.tick(localPlayer);
 		PlaceholderBlockEffects.tick();
 	}
 
@@ -702,7 +785,7 @@ public final class PlaceholderWorld {
 		((LocalPlayerAccessor) localPlayer).nls$setCrouching(!localPlayer.getAbilities().flying
 			&& !localPlayer.isSwimming() && !localPlayer.isPassenger() && pose.nls$canFit(Pose.CROUCHING)
 			&& (localPlayer.isShiftKeyDown() || !localPlayer.isSleeping() && !pose.nls$canFit(Pose.STANDING)));
-		if (localPlayer.getAbilities().flying) {
+		if (localPlayer.noPhysics) {
 			// Noclip must not use Player.updatePlayerPose's forced crawling inside solid blocks.
 			localPlayer.setPose(Pose.STANDING);
 		} else {
@@ -737,6 +820,12 @@ public final class PlaceholderWorld {
 		return isBound() ? renderClock : deltaTracker;
 	}
 
+	public static boolean retainsForRendering(final Object candidate) {
+		if (!isBound()) return false;
+		return candidate instanceof Entity entity && entity.level() == level
+			|| candidate instanceof net.minecraft.world.level.block.entity.BlockEntity block && block.getLevel() == level;
+	}
+
 	private static boolean isBound() {
 		return installed && level != null && Minecraft.getInstance().level == level;
 	}
@@ -746,9 +835,13 @@ public final class PlaceholderWorld {
 		return isBound() ? renderClock.getGameTimeDeltaPartialTick(true) : original;
 	}
 
+	public static float avatarPartialTick(final int entityId, final float original) {
+		return isBound() ? (player != null && entityId == player.getId() ? localPartialTick(original) : 1.0F) : original;
+	}
+
 	/** Remote entities keep their final pose; the controlled player's animation continues. */
 	public static float entityPartialTick(final Entity entity, final float original) {
-		return isBound() ? (entity == player ? localPartialTick(original) : 1.0F) : original;
+		return isBound() ? (entity == player || PlaceholderItems.owns(entity) ? localPartialTick(original) : 1.0F) : original;
 	}
 
 	/** A split clock, not a globally frozen clock: freezing camera alpha quantizes visuals to 20 Hz. */
@@ -833,7 +926,8 @@ public final class PlaceholderWorld {
 
 		if (minecraft.options.keyInventory.consumeClick() && ClientUi.screen(minecraft) == null && bind()) {
 			try {
-				ClientUi.setScreen(minecraft, new LoadingInventoryScreen(player));
+				if (!player.isSpectator()) ClientUi.setScreen(minecraft, player.isCreative()
+					? new io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen(player) : new LoadingInventoryScreen(player));
 			} finally {
 				unbind();
 			}
@@ -845,10 +939,11 @@ public final class PlaceholderWorld {
 					while (minecraft.options.keyHotbarSlots[slot].consumeClick()) PlaceholderInteraction.selectSlot(player, slot);
 				}
 				while (minecraft.options.keySwapOffhand.consumeClick()) PlaceholderInteraction.swapOffhand(player);
+				while (minecraft.options.keyDrop.consumeClick()) PlaceholderItems.dropSelected(player, minecraft.hasControlDown());
 				boolean attack = minecraft.options.keyAttack.consumeClick();
 				boolean use = minecraft.options.keyUse.consumeClick();
-				// Instant sandbox breaking is a press action, not held creative mining. Reuse
-				// vanilla's click queue so turning while held cannot destroy another block.
+				// Fresh presses start local actions; held mining progresses on the 20 Hz scene tick.
+				// Consume vanilla's click queue without replaying it in the incoming session.
 				if (attack) interaction.attack(player);
 				if (use || minecraft.options.keyUse.isDown()) interaction.use(player);
 				while (minecraft.options.keyPickItem.consumeClick()) PlaceholderInteraction.pickBlock(player);

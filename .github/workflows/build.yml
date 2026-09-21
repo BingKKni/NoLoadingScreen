@@ -28,6 +28,10 @@ jobs:
             java: '25'
             project: '.'
             artifacts: 'build/libs/'
+          - target: fabric-26.3
+            java: '25'
+            project: 'platforms/fabric-26.3'
+            artifacts: 'platforms/fabric-26.3/build/libs/'
           - target: neoforge-1.21.10
             java: '21'
             project: 'platforms/neoforge-1.21.10'

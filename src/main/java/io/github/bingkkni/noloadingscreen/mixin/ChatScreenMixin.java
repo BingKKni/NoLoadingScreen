@@ -16,6 +16,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ChatScreenMixin {
 	@Inject(method = "handleChatInput", at = @At("HEAD"), cancellable = true)
 	private void nls$blockLoadingChat(final String message, final boolean addToRecent, final CallbackInfo ci) {
+		if (io.github.bingkkni.noloadingscreen.PlaceholderCommands.execute(message.strip())) {
+			ci.cancel();
+			return;
+		}
 		if (!message.isBlank() && NoLoadingScreen.blockOutgoingMessage(message.stripLeading().startsWith("/"))) {
 			ci.cancel();
 		} else if (NoLoadingScreen.isLoading()) {

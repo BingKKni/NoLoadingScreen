@@ -67,7 +67,7 @@ public final class LoadingWaitLoop {
 		// while presenting, and a callback queued there would only run after the wait ends.
 		pollingInput = true;
 		try {
-			WaitFrame.pollEvents();
+			WaitFrame.pollEvents(minecraft);
 			if (minecraft.getWindow().shouldClose()) minecraft.stop(); // saving must still finish
 			NoLoadingScreen.tryResourcePlaceholder();
 			long now = ClientRuntime.millis();
@@ -78,7 +78,7 @@ public final class LoadingWaitLoop {
 					for (int i = 0; i < ticks; i++) {
 						PlaceholderWorld.tick();
 						Screen screen = ClientUi.screen(minecraft);
-						if ((screen instanceof LoadingInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)
+						if ((screen instanceof LoadingInventoryScreen || screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)
 							&& PlaceholderWorld.bind()) {
 							try { screen.tick(); } finally { PlaceholderWorld.unbind(); }
 						}

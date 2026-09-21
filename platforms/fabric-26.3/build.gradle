@@ -1,0 +1,8 @@
+plugins { id 'net.fabricmc.fabric-loom' version '1.17.20' }
+ext.minecraftVersion = '26.3'
+ext.apiSourceRoot = '../minecraft-26.3/src'
+ext.fabricLoaderVersion = '0.19.5'
+ext.modMenuVersion = '21.0.0-beta.1'
+// 26.3 keeps first-person hand state on LocalPlayer; GameRenderer has no private member left to reach.
+ext.sharedExcludes = ['**/mixin/GameRendererAccessor.java']
+apply from: '../fabric-modern.gradle'

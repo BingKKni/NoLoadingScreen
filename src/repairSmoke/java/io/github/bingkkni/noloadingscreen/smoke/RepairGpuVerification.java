@@ -9,7 +9,6 @@ import io.github.bingkkni.noloadingscreen.PlaceholderRegistries;
 import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
 import io.github.bingkkni.noloadingscreen.SavingWorldView;
 import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
-import io.github.bingkkni.noloadingscreen.mixin.GameRendererAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import java.lang.reflect.Field;
@@ -24,10 +23,8 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.client.renderer.ItemInHandRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -35,16 +32,12 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.Vec3;
-import org.lwjgl.glfw.GLFW;
-import org.lwjgl.glfw.GLFWCursorPosCallback;
-import org.lwjgl.glfw.GLFWKeyCallback;
-import org.lwjgl.glfw.GLFWMouseButtonCallback;
-import org.lwjgl.opengl.GL11;
 import sun.misc.Unsafe;
 
 /**
- * Real client, native loader, actual GL frames and real ticks. Input arrives through the game's own
- * GLFW callbacks, so the transformed dispatch chain is exercised. No user save, server or socket:
+ * Real client, native loader, actual GPU frames and real ticks. Input arrives through the game's own
+ * window event path ({@link RepairInput}), so the transformed dispatch chain is exercised. No user
+ * save, server or socket:
  * the integrated-server wait polls a {@link SaveWaitProbe} that ends by itself.
  */
 public final class RepairGpuVerification {
@@ -55,7 +48,7 @@ public final class RepairGpuVerification {
 	private static final float DEGREES_PER_STEP = (float) (MOUSE_STEP * 0.15);
 	private static final int SETTLE_FRAMES = 8;
 
-	private enum Stage { BOOT, SYNTHETIC, KICK, PICK_PRESS, PICK_HOLD, PICK_RELEASE, PICK_AGAIN, INVENTORY, DONE }
+	private enum Stage { BOOT, SYNTHETIC, KICK, PICK_PRESS, PICK_HOLD, PICK_RELEASE, PICK_AGAIN, CREATIVE_INVENTORY, INVENTORY, OPTIONS, DONE }
 
 	private static Stage stage = Stage.BOOT;
 	private static int framesInStage;
@@ -79,7 +72,6 @@ public final class RepairGpuVerification {
 	private static Vec3 lastCameraPos;
 	private static Vec3 lastCameraStep;
 	private static float lastCameraYaw = Float.NaN;
-	private static double cursorX;
 
 	private RepairGpuVerification() {}
 
@@ -99,8 +91,7 @@ public final class RepairGpuVerification {
 		else if (now - stageStart > STAGE_TIMEOUT_NS) throw new AssertionError("Stage " + stage + " did not finish in time");
 		switch (stage) {
 			case BOOT -> {
-				NoLoadingScreen.LOGGER.info("Repair GPU: {} / {} / {}", GL11.glGetString(GL11.GL_VENDOR),
-					GL11.glGetString(GL11.GL_RENDERER), GL11.glGetString(GL11.GL_VERSION));
+				NoLoadingScreen.LOGGER.info("Repair GPU: {}", RepairFixtures.describeGpu());
 				focus(client, true);
 				RepairFixtures.bindItemComponents(PlaceholderRegistries.ready());
 				long installStart = System.nanoTime();
@@ -117,6 +108,7 @@ public final class RepairGpuVerification {
 				enter(Stage.KICK);
 			}
 			case KICK -> {
+				io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig.get().retainWorldOnKick = true;
 				NoLoadingScreen.onPreparingResources();
 				check(PlaceholderWorld.active(), "Second synthetic world constructed");
 				promoteToLiveSession(client);
@@ -125,36 +117,47 @@ public final class RepairGpuVerification {
 				check(DisconnectedWorldView.visible(), "Real disconnect retains KickWarn scene");
 				check(!player.connection.getConnection().isConnected(), "Offline connection has no live channel");
 				check(ClientUi.screen(client) == null, "KickWarn hides the disconnect screen");
-				mouseButton(client, GLFW.GLFW_PRESS);
+				SandboxGpuChecks.run(client);
+				RepairInput.middleButton(client, true);
 				enter(Stage.PICK_PRESS);
 			}
 			case PICK_PRESS -> {
 				if (framesInStage < SETTLE_FRAMES) return;
 				check(player.getMainHandItem().is(Items.STONE), "Middle press picks the first aimed block through real ticks");
-				mouseMove(client, 0); // vanilla ignores the first motion after a grab; it only records the cursor
-				mouseMove(client, -90 / 0.15); // real mouse turn onto the dirt block while the button stays held
+				RepairInput.mouseMove(client, 0); // vanilla ignores the first motion after a grab; it only records the cursor
+				RepairInput.mouseMove(client, -90 / 0.15); // real mouse turn onto the dirt block while the button stays held
 				enter(Stage.PICK_HOLD);
 			}
 			case PICK_HOLD -> {
 				if (framesInStage < SETTLE_FRAMES) return;
 				check(Math.abs(player.getYRot() + 90) < 2, "Mouse turned the held view onto the dirt block: yaw " + player.getYRot());
 				check(player.getMainHandItem().is(Items.STONE), "Holding the middle button does not pick another block");
-				mouseButton(client, GLFW.GLFW_RELEASE);
+				RepairInput.middleButton(client, false);
 				enter(Stage.PICK_RELEASE);
 			}
 			case PICK_RELEASE -> {
 				if (framesInStage < SETTLE_FRAMES) return;
 				check(player.getMainHandItem().is(Items.STONE), "Releasing the middle button does not pick the newly aimed block");
-				mouseButton(client, GLFW.GLFW_PRESS);
+				RepairInput.middleButton(client, true);
 				enter(Stage.PICK_AGAIN);
 			}
 			case PICK_AGAIN -> {
 				if (framesInStage < SETTLE_FRAMES) return;
 				check(player.getMainHandItem().is(Items.DIRT), "A new press picks the newly aimed block");
-				mouseButton(client, GLFW.GLFW_RELEASE);
+				RepairInput.middleButton(client, false);
 				NoLoadingScreen.LOGGER.info("Repair pick press/hold/release PASSED");
 				verifyHands(client);
 				verifyFov(client);
+				check(PlaceholderWorld.bind(), "Open local creative inventory");
+				try { ClientUi.setScreen(client, new io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen(player)); }
+				finally { PlaceholderWorld.unbind(); }
+				enter(Stage.CREATIVE_INVENTORY);
+			}
+			case CREATIVE_INVENTORY -> {
+				if (now - stageStart < 1_000_000_000L) return;
+				check(ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen, "Creative inventory frames survived");
+				ClientUi.setScreen(client, null);
+				PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 				check(PlaceholderWorld.bind(), "Open local inventory");
 				try { ClientUi.setScreen(client, new LoadingInventoryScreen(player)); }
 				finally { PlaceholderWorld.unbind(); }
@@ -166,6 +169,13 @@ public final class RepairGpuVerification {
 				check(ClientUi.screen(client) instanceof LoadingInventoryScreen, "Actual inventory frames survived");
 				ClientUi.setScreen(client, null);
 				client.options.setCameraType(CameraType.FIRST_PERSON);
+				ClientUi.setScreen(client, new io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen(null));
+				enter(Stage.OPTIONS);
+			}
+			case OPTIONS -> {
+				if (now - stageStart < 1_000_000_000L) return;
+				check(ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen, "New options and timeout slider render in the real client");
+				ClientUi.screen(client).onClose();
 				frameTimes.sort(Double::compare);
 				NoLoadingScreen.LOGGER.info("Repair GPU frames={} p50={}ms p95={}ms max={}ms (scripted transitions included, not gameplay FPS)",
 					frameTimes.size(), percentile(.5), percentile(.95), percentile(1));
@@ -200,7 +210,7 @@ public final class RepairGpuVerification {
 		try {
 			runInsideTask(client, () -> client.disconnect(new TitleScreen(), false));
 		} finally {
-			key(client, GLFW.GLFW_KEY_W, GLFW.GLFW_RELEASE);
+			RepairInput.forwardKey(client, false);
 			set(Minecraft.class, client, "singleplayerServer", null);
 			set(Minecraft.class, client, "isLocalServer", false);
 		}
@@ -239,14 +249,14 @@ public final class RepairGpuVerification {
 		if (!Float.isNaN(lastCameraYaw) && yaw < lastCameraYaw - 1e-4F) cameraRegressions++;
 		lastCameraYaw = yaw;
 		if (saveFrames == 1) {
-			key(client, GLFW.GLFW_KEY_W, GLFW.GLFW_PRESS);
+			RepairInput.forwardKey(client, true);
 			return;
 		}
 		// Vanilla discards mouse deltas while the window is inactive; a host focus change would
 		// otherwise read as lost input. Pin the fixture's focus and record how often it was needed.
 		if (!client.isWindowActive()) { focusRepairs++; focus(client, true); }
 		// Delivered exactly like an OS event polled while the frame path presents: outside our own poll.
-		mouseMove(client, MOUSE_STEP);
+		RepairInput.mouseMove(client, MOUSE_STEP);
 		injectedMoves++;
 	}
 
@@ -259,21 +269,20 @@ public final class RepairGpuVerification {
 			inventory.clearContent();
 			inventory.setSelectedSlot(0);
 			inventory.setItem(0, new ItemStack(Items.STONE, 4));
-			ItemInHandRenderer hands = ((GameRendererAccessor) client.gameRenderer).nls$hands();
 			LivingEntityAccessor tickers = (LivingEntityAccessor) player;
 			for (int i = 0; i < 20; i++) PlaceholderWorld.tick();
-			check(height(hands) > .9F, "Held item starts equipped");
+			check(height(client) > .9F, "Held item starts equipped");
 			PlaceholderInteraction.clickSlot(player, 36, 0, InventoryClick.QUICK_MOVE);
 			PlaceholderWorld.tick();
 			check(player.getMainHandItem().isEmpty(), "Hotbar item moved to backpack");
 			check(tickers.nls$itemSwapTicker() == 0, "Emptying the hand restarts the vanilla swap ticker");
-			check(height(hands) < .9F, "Hotbar to backpack re-equips the empty hand");
+			check(height(client) < .9F, "Hotbar to backpack re-equips the empty hand");
 			for (int i = 0; i < 10; i++) PlaceholderWorld.tick();
-			check(height(hands) > .9F, "The empty hand is raised again");
+			check(height(client) > .9F, "The empty hand is raised again");
 			PlaceholderInteraction.clickSlot(player, 9, 0, InventoryClick.QUICK_MOVE);
 			PlaceholderWorld.tick();
 			check(!player.getMainHandItem().isEmpty(), "Backpack item returns to hotbar");
-			check(tickers.nls$itemSwapTicker() == 0 && height(hands) < .9F, "Backpack to hand animates");
+			check(tickers.nls$itemSwapTicker() == 0 && height(client) < .9F, "Backpack to hand animates");
 		} finally { PlaceholderWorld.unbind(); }
 		NoLoadingScreen.LOGGER.info("Repair hand equip directions PASSED");
 	}
@@ -312,11 +321,7 @@ public final class RepairGpuVerification {
 			level = client.level;
 			player = client.player;
 			mode = client.gameMode;
-			LevelChunk chunk = new LevelChunk(level, new ChunkPos(0, 0));
-			ClientboundLevelChunkPacketData packet = new ClientboundLevelChunkPacketData(chunk);
-			var buffer = packet.getReadBuffer();
-			try { level.getChunkSource().replaceWithPacketData(0, 0, buffer, packet.getHeightmaps(), packet.getBlockEntitiesTagsConsumer(0, 0)); }
-			finally { buffer.release(); }
+			RepairFixtures.installChunk(level, new LevelChunk(level, new ChunkPos(0, 0)));
 			for (int x = 0; x < 16; x++) for (int z = 0; z < 16; z++) level.setBlock(new BlockPos(x, 77, z), Blocks.STONE.defaultBlockState(), 3);
 			level.setBlock(new BlockPos(8, 79, 10), Blocks.STONE.defaultBlockState(), 3); // straight ahead at yaw 0
 			level.setBlock(new BlockPos(10, 79, 8), Blocks.DIRT.defaultBlockState(), 3); // straight ahead at yaw -90
@@ -350,30 +355,6 @@ public final class RepairGpuVerification {
 		finally { nested = false; }
 	}
 
-	// --- Real input delivery ----------------------------------------------------------------------
-
-	private static void mouseMove(Minecraft client, double dx) {
-		cursorX += dx;
-		long handle = client.getWindow().handle();
-		GLFWCursorPosCallback callback = GLFW.glfwSetCursorPosCallback(handle, null);
-		try { callback.invoke(handle, cursorX, 240.0); }
-		finally { GLFW.glfwSetCursorPosCallback(handle, callback); }
-	}
-
-	private static void mouseButton(Minecraft client, int action) {
-		long handle = client.getWindow().handle();
-		GLFWMouseButtonCallback callback = GLFW.glfwSetMouseButtonCallback(handle, null);
-		try { callback.invoke(handle, GLFW.GLFW_MOUSE_BUTTON_MIDDLE, action, 0); }
-		finally { GLFW.glfwSetMouseButtonCallback(handle, callback); }
-	}
-
-	private static void key(Minecraft client, int key, int action) {
-		long handle = client.getWindow().handle();
-		GLFWKeyCallback callback = GLFW.glfwSetKeyCallback(handle, null);
-		try { callback.invoke(handle, key, GLFW.glfwGetKeyScancode(key), action, 0); }
-		finally { GLFW.glfwSetKeyCallback(handle, callback); }
-	}
-
 	/** Movement input requires an active window; the isolated window is normally unfocused. */
 	private static void focus(Minecraft client, boolean active) throws Exception {
 		try { set(Minecraft.class, client, "windowActive", active); }
@@ -387,8 +368,8 @@ public final class RepairGpuVerification {
 		framesInStage = 0;
 	}
 
-	private static float height(ItemInHandRenderer hands) throws Exception {
-		return (float) get(ItemInHandRenderer.class, hands, "mainHandHeight");
+	private static float height(Minecraft client) throws Exception {
+		return RepairFixtures.mainHandHeight(client, player);
 	}
 
 	private static double percentile(double p) {

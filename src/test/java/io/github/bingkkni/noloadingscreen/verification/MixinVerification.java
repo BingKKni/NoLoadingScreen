@@ -63,8 +63,10 @@ public final class MixinVerification implements PreLaunchEntrypoint {
 			verifyConnectionOwnership();
 			SharedConstants.tryDetectVersion();
 			Bootstrap.bootStrap();
+			RetainedLightQueueVerification.run();
 			verifyPlaceholderRegressions();
 			SkinPreloadVerification.run();
+			SandboxVerification.run();
 			LoadingVisualVerification.run();
 			EarlyLoadingVerification.run();
 			LoadingWorkVerification.run();
@@ -79,21 +81,22 @@ public final class MixinVerification implements PreLaunchEntrypoint {
 
 	static void verifyTransformations() throws ReflectiveOperationException {
 		Map<String, String[]> targets = Map.ofEntries(
-			Map.entry("net.minecraft.client.Minecraft", new String[]{"nls$pauseLoading", "nls$tick", "nls$disconnect", "nls$handlePlaceholderKeybinds", "nls$preloadSkin", "nls$showSavingWorld", "nls$interactiveSaveFrame", "nls$savingFinished", "nls$bootWaitFrame", "nls$singleplayerLoadStarted", "nls$keepPreparedScene", "nls$keepDisconnectedCamera", "nls$keepDisconnectedEngines"}),
+			Map.entry("net.minecraft.client.Minecraft", new String[]{"nls$pauseLoading", "nls$tick", "nls$disconnect", "nls$handlePlaceholderKeybinds", "nls$preloadSkin", "nls$showSavingWorld", "nls$interactiveSaveFrame", "nls$savingFinished", "nls$bootWaitFrame", "nls$singleplayerLoadStarted", "nls$keepPreparedScene", "nls$keepDisconnectedCamera", "nls$keepDisconnectedEngines", "nls$detachRetainedScene"}),
 			Map.entry("net.minecraft.client.player.AbstractClientPlayer", new String[]{"nls$placeholderSkin", "nls$bridgeLocalSkin", "nls$offlineSurvivalMode"}),
 			Map.entry("net.minecraft.world.entity.Avatar", new String[]{"nls$modelCustomisation"}),
-			Map.entry("net.minecraft.client.multiplayer.ClientPacketListener", new String[]{"nls$loginStarting", "nls$configurationStarted", "nls$blockChatPacket", "nls$blockCommandPacket", "nls$followServerPosition"}),
+			Map.entry("net.minecraft.client.multiplayer.ClientLevel", new String[]{"nls$retireLightQueue", "nls$discardRetiredLightTask"}),
+			Map.entry("net.minecraft.client.multiplayer.ClientPacketListener", new String[]{"nls$loginStarting", "nls$configurationStarted", "nls$blockChatPacket", "nls$blockCommandPacket", "nls$followServerPosition", "nls$retireOutgoingLightQueue"}),
 			Map.entry("net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl", new String[]{"nls$retainFailedLogin"}),
 			Map.entry("net.minecraft.client.gui.screens.DisconnectedScreen", new String[]{"nls$parent", "nls$details"}),
-			Map.entry("net.minecraft.client.renderer.extract.LevelExtractor", new String[]{"nls$showLocalPlayerWithoutTerrain", "nls$invalidateFreshRenderer"}),
+			Map.entry("net.minecraft.client.renderer.extract.LevelExtractor", new String[]{"nls$showLocalPlayerWithoutTerrain", "nls$invalidateFreshRenderer", "nls$extractLocalDebris"}),
 			Map.entry("net.minecraft.client.gui.Gui", new String[]{"nls$interceptScreen", "nls$returnToPlaceholder", "nls$keepHeldTransferKeys", "nls$tickPlaceholderHud", "nls$tickLocalInventory", "nls$allowLocalSavingUi"}),
 			Map.entry("net.minecraft.client.MouseHandler", new String[]{"nls$scrollPlaceholder", "nls$dispatchWaitingMouse"}),
 			Map.entry("net.minecraft.client.KeyboardHandler", new String[]{"nls$dispatchWaitingKey"}),
-			Map.entry("net.minecraft.client.particle.ParticleEngine", new String[]{"nls$captureLocalDebris", "nls$extractLocalDebris", "nls$clearLocalDebris"}),
+			Map.entry("net.minecraft.client.particle.ParticleEngine", new String[]{"nls$captureLocalDebris", "nls$clearLocalDebris"}),
 			Map.entry("net.minecraft.client.gui.screens.ConnectScreen", new String[]{"nls$observeEncryption", "nls$earlyConnectWorld", "nls$connection", "nls$setAborted"}),
 			Map.entry("net.minecraft.client.gui.screens.worldselection.WorldOpenFlows", new String[]{"nls$preparingResources", "nls$interactiveResourceWait"}),
 			Map.entry("net.minecraft.client.gui.screens.ChatScreen", new String[]{"nls$blockLoadingChat", "nls$initLoadingChat", "nls$loadingChatClick"}),
-			Map.entry("net.minecraft.client.gui.components.CommandSuggestions", new String[]{"nls$skipLoadingSuggestions"}),
+			Map.entry("net.minecraft.client.gui.components.CommandSuggestions", new String[]{"nls$localSuggestions"}),
 			Map.entry("net.minecraft.world.entity.Entity", new String[]{"nls$collide", "nls$fluidInteraction"}),
 			Map.entry("net.minecraft.client.renderer.entity.EntityRenderDispatcher", new String[]{"nls$splitEntityClock"}),
 			Map.entry("net.minecraft.network.PacketProcessor$ListenerAndPacket", new String[]{"nls$measureIndividualPacket"}),
@@ -200,7 +203,17 @@ public final class MixinVerification implements PreLaunchEntrypoint {
 		screen.handleChatInput("blocked", true);
 		check(chat.count == 4 && chat.last.equals(NoLoadingScreen.blockedMessage(false)), "Chat-screen message guard");
 		check(chat.last.getStyle().getColor().equals(net.minecraft.network.chat.TextColor.fromLegacyFormat(ChatFormatting.RED)), "Blocked message is red");
-		((CommandSuggestions) unsafe.allocateInstance(CommandSuggestions.class)).updateCommandInfo();
+		CommandSuggestions suggestions = (CommandSuggestions) unsafe.allocateInstance(CommandSuggestions.class);
+		var input = (net.minecraft.client.gui.components.EditBox) unsafe.allocateInstance(net.minecraft.client.gui.components.EditBox.class);
+		set(net.minecraft.client.gui.components.EditBox.class, input, "value", "/gamemode cr");
+		set(net.minecraft.client.gui.components.EditBox.class, input, "cursorPos", 12);
+		set(CommandSuggestions.class, suggestions, "input", input);
+		set(CommandSuggestions.class, suggestions, "commandUsage", new java.util.ArrayList<>());
+		suggestions.updateCommandInfo();
+		Field pending = CommandSuggestions.class.getDeclaredField("pendingSuggestions");
+		pending.setAccessible(true);
+		var future = (java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>) pending.get(suggestions);
+		check(future.join().getList().stream().anyMatch(s -> s.getText().equals("creative")), "Local mode completion needs no player or connection");
 		check(minecraft.player == null, "Editing guard works with no live player");
 
 		Options options = (Options) unsafe.allocateInstance(Options.class);

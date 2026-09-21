@@ -15,7 +15,8 @@ public final class ClientVerification {
 			Map.entry("net.minecraft.client.Minecraft", new String[]{"nls$pauseLoading", "nls$tick", "nls$disconnect", "nls$handlePlaceholderKeybinds", "nls$preloadSkin", "nls$showSavingWorld", "nls$interactiveSaveFrame", "nls$savingFinished", "nls$bootWaitFrame", "nls$singleplayerLoadStarted", "nls$keepPreparedScene", "nls$keepDisconnectedCamera", "nls$keepDisconnectedEngines"}),
 			Map.entry("net.minecraft.client.player.AbstractClientPlayer", new String[]{"nls$placeholderSkin", "nls$bridgeLocalSkin", "nls$offlineSurvivalMode"}),
 			Map.entry("net.minecraft.world.entity.Avatar", new String[]{"nls$modelCustomisation"}),
-			Map.entry("net.minecraft.client.multiplayer.ClientPacketListener", new String[]{"nls$loginStarting", "nls$configurationStarted", "nls$blockChatPacket", "nls$blockCommandPacket", "nls$followServerPosition"}),
+			Map.entry("net.minecraft.client.multiplayer.ClientLevel", new String[]{"nls$retireLightQueue", "nls$discardRetiredLightTask"}),
+			Map.entry("net.minecraft.client.multiplayer.ClientPacketListener", new String[]{"nls$loginStarting", "nls$configurationStarted", "nls$blockChatPacket", "nls$blockCommandPacket", "nls$followServerPosition", "nls$retireOutgoingLightQueue"}),
 			Map.entry("net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl", new String[]{"nls$retainFailedLogin"}),
 			Map.entry("net.minecraft.client.gui.screens.DisconnectedScreen", new String[]{"nls$parent", "nls$details"}),
 			Map.entry("net.minecraft.client.gui.Gui", new String[]{"nls$drawLoadingOverlay"}),
@@ -25,7 +26,7 @@ public final class ClientVerification {
 			Map.entry("net.minecraft.client.gui.screens.ConnectScreen", new String[]{"nls$observeEncryption", "nls$earlyConnectWorld", "nls$connection", "nls$setAborted"}),
 			Map.entry("net.minecraft.client.gui.screens.worldselection.WorldOpenFlows", new String[]{"nls$preparingResources", "nls$interactiveResourceWait"}),
 			Map.entry("net.minecraft.client.gui.screens.ChatScreen", new String[]{"nls$blockLoadingChat", "nls$initLoadingChat", "nls$loadingChatClick"}),
-			Map.entry("net.minecraft.client.gui.components.CommandSuggestions", new String[]{"nls$skipLoadingSuggestions"}),
+			Map.entry("net.minecraft.client.gui.components.CommandSuggestions", new String[]{"nls$localSuggestions"}),
 			Map.entry("net.minecraft.world.entity.Entity", new String[]{"nls$collide", "nls$updateFluidOnEyes"}),
 			Map.entry("net.minecraft.client.renderer.entity.EntityRenderDispatcher", new String[]{"nls$splitEntityClock"}),
 			Map.entry("net.minecraft.network.PacketProcessor$ListenerAndPacket", new String[]{"nls$measureIndividualPacket"}),
@@ -53,11 +54,15 @@ public final class ClientVerification {
 			}
 			System.out.println("Verified Mixin target: " + entry.getKey());
 		}
+		assertHook("net.minecraft.client.entity.ClientAvatarState", "nls$restore");
+		assertHook("net.minecraft.client.multiplayer.MultiPlayerGameMode", "nls$localCreative");
+		assertHook("net.minecraft.world.entity.player.Player", "nls$localDrop");
 		assertHook("net.minecraft.client.Minecraft", "nls$renderFrame");
 		assertHook("net.minecraft.client.Minecraft", "nls$returnToPlaceholder");
 		assertHook("net.minecraft.client.renderer.GameRenderer", "nls$abortFrame");
 		assertHook("net.minecraft.client.gui.render.GuiRenderer", "nls$abortFrame");
 		assertHook("net.neoforged.neoforge.client.ClientHooks", "nls$stripMountedScreen");
+		io.github.bingkkni.noloadingscreen.verification.SandboxVerification.run();
 		verifyOptionalMods();
 		if (!Boolean.getBoolean("nls.verify.compatibility")) io.github.bingkkni.noloadingscreen.verification.NeoForgeBehaviorVerification.run();
 		System.out.println("NeoForge CLIENT transformation inventory passed");
@@ -82,6 +87,14 @@ public final class ClientVerification {
 			io.github.bingkkni.noloadingscreen.verification.NeoForgeOptionalVerification.run();
 		}
 		if (via) assertHook("net.minecraft.client.multiplayer.ClientPacketListener", "sendConnectionDetails");
+		if (io.github.bingkkni.noloadingscreen.compat.WaveyCapesCompatibility.clockHookSupported()) {
+			assertHook("dev.tr7zw.waveycapes.renderlayers.CustomCapeRenderLayer", "nls$capeClock");
+			assertHook("net.minecraft.world.entity.LivingEntity", "getSimulation");
+		}
+		if (io.github.bingkkni.noloadingscreen.platform.LoaderServices.modVersion("entityculling").isPresent()) {
+			assertHook("net.minecraft.world.entity.Entity", "nls$retainedVisibility");
+			assertHook("net.minecraft.world.level.block.entity.BlockEntity", "nls$retainedVisibility");
+		}
 	}
 	private static void assertHook(String target, String hook) throws Exception {
 		Class<?> type = Class.forName(target, false, ClientVerification.class.getClassLoader());

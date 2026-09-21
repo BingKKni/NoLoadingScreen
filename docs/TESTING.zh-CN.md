@@ -4,6 +4,27 @@
 
 适用版本：Minecraft 26.2、Fabric Loader 0.19.3 或更高、Java 25。当前版本：1.1.0。
 
+## 接管旧世界的延迟光照队列回归
+
+`ClientLevel` 的延迟光照任务捕获旧 `ClientPacketListener`；原版 `clearLevel` 清空监听器的世界后，保留场景再次轮询会空指针。现在只对已接管的旧世界永久丢弃该队列及后续入队，不清空光照引擎或区块网格。三个待交接快照（重配置、保存、KickWarn）只在其对应监听器实际清空世界时提前退休队列；捕获本身不修改仍在使用的世界。直接 `adopt` 在通过条件检查后、首次绑定前同样处理。合成场景、正常世界和新世界保持原版队列行为。
+
+共享 `RetainedLightQueueVerification` 已接入根目录 `verifyMixins` 与各平台 `verifyClient` / `check`。无窗口测试调用真实转换后的 `queueLightUpdate` / `pollLightUpdates` / `clearLevel`，用原版 `queueLightRemoval` 创建捕获监听器的任务；未接管对照必须复现原版 NPE，三个交接路径各连续六次必须安全清理，同时验证迟到任务、实例隔离、捕获/拒绝接管不清队列，以及普通/合成/新世界的 FIFO、预算和异常传播。这里使用内存快照夹具，不等于实际网络切服或完整 GPU 接管测试。
+
+## 1.1.0 第四轮：进图窗口的头部抽搐与 Minecraft 26.3
+
+| 反馈 | 根因 | 处理 |
+|---|---|---|
+| 单人**创建**世界时，区块到达到加载完成之间，第三人称且视角转动过后能看到自己的头在抽搐（Fabric 26.2 上报） | 登录到 `ServerboundPlayerLoadedPacket` 发出之前，原版 `LocalPlayer.tick` 直接返回：不跑 `aiStep`，也不跑 `LivingEntity.tick`，因此没有任何代码把视角写进 `yHeadRot`、转动 `yBodyRot`。原版用「加载地形中」界面把这段时间盖住；本 Mod 撤掉界面并抓住鼠标，玩家于是在第三人称看见一个没被 tick 的自己：头的 yaw 停在构造器的随机值（0–6.28°），`yHeadRotO` 为 0，渲染器每 tick 在两者之间插值一次，就是逐 tick 的锯齿抽搐；身体也不跟随镜头。新建世界时 `LevelLoadTracker` 的 `closeDelayMs` 是 500 ms（已有世界为 0），所以只在创建世界时能看到这半秒。多人模式同样存在这段窗口（服务端在 `handleAcceptPlayerLoad` 或 60 tick 超时后才认为客户端就绪），只是通常更短 | `LocalPlayerMixin` 在 `LocalPlayer.tick` 的 HEAD 调用 `NoLoadingScreen.beforePlayerTick`：连接尚未 `hasClientLoaded()` 时执行 `PlaceholderVisuals.followView`，即 `Player.aiStep` 的 `yHeadRot = yRot` 加 `LivingEntity.tick` 的 `tickHeadTurn` 和角度归一化——正是原版之后每 tick 会做的那份视觉簿记，不含移动、挥手、年龄或任何数据包。选「跟随镜头」而不是「固定初始朝向」：前者与 0.5 秒后原版接手时的姿态连续，后者会在接手一刻突然转头。共享代码，14 个目标同时生效；无窗口回归新增 `verifyHeadBeforeLoaded`（头/身体跟随、无副作用、就绪后钩子让位） |
+| 适配 Minecraft 26.3 | 26.3 于 2026-09-15 发布：GLFW 换成 SDL（输入事件改由 `SDLEventHandler` 调度，原版同步等待循环还会在每帧前 `pumpEvents` 冲掉输入）、GPU 类型移到 `com.mojang.renderpearl.api`、authlib 10 的 `ProfileResult` 换包、`attackAnim` 改为 `SwingState`、第一人称手部状态从 `GameRenderer` 移到 `LocalPlayer`、`createPlayer` 多了 `ItemActivation`、`isSectionCompiledAndVisible` 多了淡入时长、`VanillaPackResources` 不再实现 `PackResources`、`PotionBrewing` 移出客户端 | 新增 `platforms/fabric-26.3`（Loom 1.17.20、Fabric Loader 0.19.5、Mod Menu 21.0.0-beta.1）与 API 层 `platforms/minecraft-26.3`。共享代码新增适配器 `FrameSurface`、`ProfileLookup`、`PlayerAnimation`、`RegistryLoader.vanillaData`、`SceneRenderer.tickHands`、`SceneFactory.createPlayer`，每个族各自实现。26.3 层另有 `SDLEventHandlerMixin`（把 8 处 `Minecraft.execute` 的输入调度接进 `LoadingWaitLoop.dispatchInput`）和 `WaitInputMixin`（本地帧接管等待时跳过原版的 `pumpEvents` 冲刷，否则保存/启动等待期间鼠标键盘全部被丢弃）。NeoForge、Forge 尚无 26.3 构建，暂不新增目标 |
+
+Fabric 26.3 的 `verifyClient` 通过 39 个严格 Mixin / 34 个目标；`verifyRepairGpu` 通过 1180 条断言（输入改由 `SDL_PushEvent` 注入，经过游戏自己的 SDL 事件循环与 `Minecraft.execute` 调度链），日志见 `platforms/fabric-26.3/build/repair-gpu/logs/latest.log`。
+
+```bash
+# Fabric 26.3（JAVA_HOME 指向 JDK 25）；Loom 把资源放在 ~/.gradle/caches/fabric-loom/assets，索引名为 26.3-34
+./gradlew -p platforms/fabric-26.3 build check
+./gradlew -p platforms/fabric-26.3 verifyRepairGpu -PassetsDir="/path/to/fabric-loom/assets" -PassetIndex=26.3-34
+```
+
 ## 1.1.0：多平台实机修复与 GPU 回归
 
 NeoForge 1.21.10/1.21.11/26.1/26.2、Forge 26.2 与 Fabric 26.1 上实测发现的问题及处理结果：
@@ -31,7 +52,11 @@ NeoForge 1.21.10/1.21.11/26.1/26.2、Forge 26.2 与 Fabric 26.1 上实测发现�
 ./gradlew -p platforms/neoforge-1.21.11 verifyRepairGpu -PassetsDir="/path/to/assets" -PassetIndex=29
 ```
 
-`assetsDir` 可以直接指向 ModDevGradle 的 `downloadAssets` 缓存（默认 `~/.gradle/caches/neoformruntime/assets`）。实测结果：root Fabric 26.2、Fabric 26.1、NeoForge 26.1/26.2、Forge 26.2、NeoForge 1.21.10/1.21.11 七个目标无 Sodium 通过；NeoForge 26.2 与 Fabric 26.2 装载 Sodium `0.9.2+mc26.2` 通过（日志出现 `Prepared Sodium terrain pipelines`）。1.21.11 的保存等待做过红绿对照：撤销修复后视角转动为 0、位移为 0，恢复修复后与注入量一致。测试窗口失去宿主焦点时原版会丢弃鼠标增量，回归会重新置焦并把次数记入日志，不当作 Mod 缺陷。
+`assetsDir` 可以直接指向 ModDevGradle 的 `downloadAssets` 缓存（默认 `~/.gradle/caches/neoformruntime/assets`）。
+
+2026-09-17 优化 Mod 适配轮（详见 [OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md](OPTIMIZATION_MOD_COMPATIBILITY.zh-CN.md)）：9 个 26.x 目标 `build check` 通过；8 个 26.x 平台目标 `verifyCompatibility` 装载各自白名单 Sodium 通过，Fabric 26.1/26.1.2/26.3 与 NeoForge 26.1.2/26.2 另用“Sodium + 该版本全部候选优化 Mod”全栈通过；`verifyRepairGpu` 装载白名单 Sodium 在 Fabric 26.1（0.8.9）、Fabric 26.2（0.9.2）、Fabric 26.3（0.9.2）、NeoForge 26.1（0.8.9）、NeoForge 26.1.2（0.9.2）、NeoForge 26.2（0.9.2）通过，Forge 26.2 无 Sodium 通过。
+
+实测结果：root Fabric 26.2、Fabric 26.1、NeoForge 26.1/26.2、Forge 26.2、NeoForge 1.21.10/1.21.11 七个目标无 Sodium 通过；NeoForge 26.2 与 Fabric 26.2 装载 Sodium `0.9.2+mc26.2` 通过（日志出现 `Prepared Sodium terrain pipelines`）。1.21.11 的保存等待做过红绿对照：撤销修复后视角转动为 0、位移为 0，恢复修复后与注入量一致。测试窗口失去宿主焦点时原版会丢弃鼠标增量，回归会重新置焦并把次数记入日志，不当作 Mod 缺陷。
 
 这些是隔离的短时 GPU 回归，不是整合包、真实存档或服务器验收；1.21.10 的“视角抽搐”在回归中未观测到相机回退，若仍出现请按下方清单保留日志。当前测试所用的 Sodium `0.9.2-alpha.4+mc26.2` 不在白名单内，私有优化不会启用，需换用正式版 `0.9.2+mc26.2`。
 
@@ -143,7 +168,7 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 - 模式回归检查 KickWarn 中冒险/旁观转生存、原有生存/创造与飞行保留、旧旁观隐身消除且隐身药水保留；控制器与本地玩家模式一致，不污染其他玩家/共享 PlayerInfo，普通加载/保存不转换。
 - `LoadingTransitionsVerification`：验证资源准备到启动世界保留同一场景/玩家/视角、只跳过空会话清理、无网格时仅放行占位本地人物、HUD 仅提交进度条、原始多色换行消息、被踢首 tick 进入离线占位、650 tick 不退出、Esc 主动离开、普通踢出与异常清理。GPU 绑定使用测试夹具，不能代替实机画面验证。
 - `verifyInputCompatibility` 使用指定 ViaFabricPlus 原始 JAR 转换 Minecraft、Gui、握手监听器、LevelExtractor 和断线界面，检查 NoLoadingScreen 目标转换；当前已覆盖 4.6.1 与 5.0.1。
-- `verifyOptimizationCompatibility` 接受 JAR/目录列表，按检测到的 Mod ID 检查 Sodium/Iris/ImmediatelyFast/Lithium/FerriteCore/EntityCulling/MoreCulling/Dynamic FPS/Sodium Extra/RRLS 与 NoLoadingScreen 的共享目标；支持的 Sodium 还会检查四个私有 Mixin 和非阻塞 collector 桥。
+- `verifyOptimizationCompatibility` 接受 JAR/目录列表，按检测到的 Mod ID 检查 Sodium/Iris/ImmediatelyFast/Lithium/FerriteCore/EntityCulling/MoreCulling/Dynamic FPS/Sodium Extra/BadOptimizations/Particle Core/C2ME/ModernFix/RRLS 与 NoLoadingScreen 的共享目标；支持的 Sodium 还会检查四个私有 Mixin 和非阻塞 collector 桥。26.x 平台目标（含 Fabric）改用 `verifyCompatibility -PcompatibilityJars=<jar 或目录,...>`。
 - `EarlyLoadingVerification`：实际解码原版客户端动态注册表，并验证私有静态标签已绑定而全局标签未被修改；验证加密/离线触发、隐藏/挂载/提示界面中的初始连接单一驱动、取消连接 Future、登录成功不关闭连接、资源等待保持原版完成谓词与异常、独立保存时钟、局部输入派发。
 - 保存回归额外验证实际 Gui Mixin 撤下保存界面、只在完整占位绑定内放行本地 GUI、正常/异常退出都释放场景与时钟。Mixin 转换错误会直接失败，不打开阻塞构建的崩溃对话框。
 

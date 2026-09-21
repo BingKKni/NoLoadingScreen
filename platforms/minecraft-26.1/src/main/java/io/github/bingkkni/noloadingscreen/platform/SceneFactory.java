@@ -7,6 +7,10 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.CommonListenerCookie;
 import net.minecraft.client.multiplayer.LevelLoadTracker;
+import net.minecraft.client.multiplayer.MultiPlayerGameMode;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.ClientRecipeBook;
+import net.minecraft.stats.StatsCounter;
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
@@ -72,6 +76,11 @@ public final class SceneFactory {
 			seaLevel
 		);
 		return new Scene(level, listener);
+	}
+
+	/** Fresh stats and recipe book: nothing of the real session is shared with the disposable player. */
+	public static LocalPlayer createPlayer(final MultiPlayerGameMode gameMode, final ClientLevel level) {
+		return gameMode.createPlayer(level, new StatsCounter(), new ClientRecipeBook());
 	}
 
 	private static void setNoon(final ClientPacketListener listener, final RegistryAccess.Frozen registries) {

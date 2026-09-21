@@ -42,6 +42,14 @@ public final class PlaceholderMovement {
 		final Physics physics, final boolean flying, final boolean sprinting, final boolean jumpDown,
 		final boolean enabled, final double minY, final double maxY, final Collision collision
 	) {
+		tick(forward, strafe, vertical, yaw, physics, flying, sprinting, jumpDown, enabled, minY, maxY, false, collision);
+	}
+
+	public void tick(
+		final double forward, final double strafe, final double vertical, final float yaw,
+		final Physics physics, final boolean flying, final boolean sprinting, final boolean jumpDown,
+		final boolean enabled, final double minY, final double maxY, final boolean noclip, final Collision collision
+	) {
 		this.oldX = this.x;
 		this.oldY = this.y;
 		this.oldZ = this.z;
@@ -87,9 +95,9 @@ public final class PlaceholderMovement {
 		this.velocityZ += (forward * cos + strafe * sin) * scale * acceleration;
 
 		Motion requested = new Motion(this.velocityX, this.velocityY, this.velocityZ);
-		// Only explicit flight bypasses walls. Entity.move is deliberately NOT called: it has
-		// gameplay callbacks (fall damage, block effects, sounds, auto-jump and packets).
-		Motion resolved = flying ? requested : collision.resolve(requested);
+		// Flight and collision are independent: ordinary creative flight still hits walls.
+		// Never call Entity.move's gameplay callbacks for the disposable player.
+		Motion resolved = noclip ? requested : collision.resolve(requested);
 		double movedY = Math.clamp(this.y + resolved.y, minY, maxY) - this.y;
 		this.x += resolved.x;
 		this.y += movedY;

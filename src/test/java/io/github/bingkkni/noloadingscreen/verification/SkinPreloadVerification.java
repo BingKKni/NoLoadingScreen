@@ -4,7 +4,7 @@ import com.google.common.collect.ImmutableMultimap;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 import com.mojang.authlib.properties.PropertyMap;
-import com.mojang.authlib.yggdrasil.ProfileResult;
+import io.github.bingkkni.noloadingscreen.platform.ProfileLookup;
 import io.github.bingkkni.noloadingscreen.LocalSkinPreloader;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -31,7 +31,7 @@ final class SkinPreloadVerification {
 	}
 
 	private static void verifyAsyncPipeline() {
-		CompletableFuture<ProfileResult> profile = new CompletableFuture<>();
+		CompletableFuture<Object> profile = new CompletableFuture<>();
 		CompletableFuture<Optional<PlayerSkin>> texture = new CompletableFuture<>();
 		TestSkinManager manager = new TestSkinManager(texture);
 		ArrayDeque<Runnable> clientTasks = new ArrayDeque<>();
@@ -41,7 +41,7 @@ final class SkinPreloadVerification {
 		Property textures = new Property("textures", "test-texture-metadata");
 		GameProfile completeProfile = new GameProfile(PLAYER_ID, "SkinTest",
 			new PropertyMap(ImmutableMultimap.of("textures", textures)));
-		profile.complete(new ProfileResult(completeProfile));
+		profile.complete(ProfileLookup.result(completeProfile));
 		check(manager.requests == 0 && clientTasks.size() == 1, "Profile completion schedules skin lookup on the client executor");
 		clientTasks.removeFirst().run();
 		check(manager.requests == 1 && manager.profile == completeProfile, "Pass the full original profile, including texture properties");
@@ -61,7 +61,7 @@ final class SkinPreloadVerification {
 		check(LocalSkinPreloader.get(PLAYER_ID) == null && manager.requests == 0, "Missing/offline profile leaves vanilla fallback intact");
 		LocalSkinPreloader.preload(PLAYER_ID, CompletableFuture.failedFuture(new IllegalStateException("Expected profile failure")), manager, Runnable::run);
 		check(LocalSkinPreloader.get(PLAYER_ID) == null && manager.requests == 0, "Profile failure cannot escape to rendering");
-		CompletableFuture<ProfileResult> cancelled = new CompletableFuture<>();
+		CompletableFuture<Object> cancelled = new CompletableFuture<>();
 		LocalSkinPreloader.preload(PLAYER_ID, cancelled, manager, Runnable::run);
 		cancelled.cancel(false);
 		check(LocalSkinPreloader.get(PLAYER_ID) == null, "Cancelled profile cannot escape to rendering");
@@ -69,7 +69,7 @@ final class SkinPreloadVerification {
 		check(LocalSkinPreloader.get(PLAYER_ID) == null, "Vanilla's empty texture result uses vanilla fallback");
 		preload(PLAYER_ID, CompletableFuture.failedFuture(new IllegalStateException("Expected texture failure")));
 		check(LocalSkinPreloader.get(PLAYER_ID) == null, "Failed texture future cannot escape to rendering");
-		LocalSkinPreloader.preload(PLAYER_ID, CompletableFuture.completedFuture(new ProfileResult(new GameProfile(OTHER_ID, "Other"))), manager, Runnable::run);
+		LocalSkinPreloader.preload(PLAYER_ID, CompletableFuture.completedFuture(ProfileLookup.result(new GameProfile(OTHER_ID, "Other"))), manager, Runnable::run);
 		check(LocalSkinPreloader.get(PLAYER_ID) == null && manager.requests == 0, "Mismatched resolved profile must not load or expose another skin");
 	}
 
@@ -84,7 +84,7 @@ final class SkinPreloadVerification {
 	}
 
 	static void preload(final UUID playerId, final CompletableFuture<Optional<PlayerSkin>> texture) {
-		LocalSkinPreloader.preload(playerId, CompletableFuture.completedFuture(new ProfileResult(new GameProfile(playerId, "SkinTest"))),
+		LocalSkinPreloader.preload(playerId, CompletableFuture.completedFuture(ProfileLookup.result(new GameProfile(playerId, "SkinTest"))),
 			new TestSkinManager(texture), Runnable::run);
 	}
 

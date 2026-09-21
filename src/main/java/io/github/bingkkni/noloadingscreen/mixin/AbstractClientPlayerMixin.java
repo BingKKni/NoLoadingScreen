@@ -43,8 +43,8 @@ public abstract class AbstractClientPlayerMixin {
 	private @Nullable GameType nls$offlineSurvivalMode(final @Nullable GameType original) {
 		// Player.gameMode() reads cached PlayerInfo, not MultiPlayerGameMode. Override only the
 		// owned offline player; never mutate the listener's shared PlayerInfo/seen-player cache.
-		return DisconnectedWorldView.active() && (Object) this instanceof LocalPlayer player && PlaceholderWorld.owns(player)
-			? Minecraft.getInstance().gameMode.getPlayerMode() : original;
+		return (Object) this instanceof LocalPlayer player && PlaceholderWorld.owns(player)
+			? PlaceholderWorld.localMode() : original;
 	}
 
 	@Inject(method = "getSkin", at = @At("HEAD"), cancellable = true)

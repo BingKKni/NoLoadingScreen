@@ -23,10 +23,13 @@ final class InputCompatibilityVerification {
 			System.out.println("Verified actual ViaFabricPlus + NoLoadingScreen input target: " + target.getName());
 		}
 		Class<?> particles = Class.forName("net.minecraft.client.particle.ParticleEngine", false, InputCompatibilityVerification.class.getClassLoader());
-		for (String hook : new String[]{"nls$captureLocalDebris", "nls$extractLocalDebris", "nls$clearLocalDebris"}) {
+		for (String hook : new String[]{"nls$captureLocalDebris", "nls$clearLocalDebris"}) {
 			check(Arrays.stream(particles.getDeclaredMethods()).anyMatch(m -> m.getName().contains(hook)),
 				"ParticleEngine: local break feedback must coexist with ViaFabricPlus (" + hook + ")");
 		}
+		Class<?> extractor = Class.forName("net.minecraft.client.renderer.extract.LevelExtractor", false, InputCompatibilityVerification.class.getClassLoader());
+		check(Arrays.stream(extractor.getDeclaredMethods()).anyMatch(m -> m.getName().contains("nls$extractLocalDebris")),
+			"LevelExtractor: local break debris must be extracted at the call site");
 		System.out.println("Verified actual ViaFabricPlus + NoLoadingScreen particle target: " + particles.getName());
 		for (var target : java.util.Map.of(
 			"net.minecraft.client.Minecraft", "nls$keepDisconnectedEngines",
