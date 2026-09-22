@@ -1,6 +1,7 @@
 package io.github.bingkkni.noloadingscreen;
 
 import io.github.bingkkni.noloadingscreen.mixin.EntityAccessor;
+import io.github.bingkkni.noloadingscreen.platform.PlayerAnimation;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -38,6 +39,7 @@ public final class PlaceholderItems {
 		item.setOldPosAndRot();
 		level.addEntity(item);
 		items.put(item, 40);
+		PlayerAnimation.swingAttack(player);
 	}
 
 	public static void tick(LocalPlayer player) {
@@ -79,8 +81,8 @@ public final class PlaceholderItems {
 			if (item.isRemoved() || items.getOrDefault(item, 0) > 0 || item.hasPickUpDelay()) continue;
 			ItemStack stack = item.getItem().copy();
 			player.getInventory().add(stack);
-			if (stack.getCount() < item.getItem().getCount()) ((ClientLevel) player.level()).playLocalSound(item,
-				net.minecraft.sounds.SoundEvents.ITEM_PICKUP, net.minecraft.sounds.SoundSource.PLAYERS, .2F, 1F);
+			// Capture the original render state before shrinking or discarding the world item.
+			if (stack.getCount() < item.getItem().getCount()) PlaceholderBlockEffects.pickup(item, player);
 			if (stack.isEmpty()) item.discard();
 			else item.setItem(stack);
 		}

@@ -1,23 +1,29 @@
 package io.github.bingkkni.noloadingscreen;
 
+import io.github.bingkkni.noloadingscreen.mixin.PlayerAccessor;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.function.Consumer;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.particle.ItemPickupParticle;
+import net.minecraft.client.particle.ItemPickupParticleGroup;
 import net.minecraft.client.particle.Particle;
 import net.minecraft.client.particle.ParticleEngine;
+import net.minecraft.client.particle.ParticleGroup;
 import net.minecraft.client.particle.ParticleRenderType;
 import net.minecraft.client.particle.QuadParticleGroup;
 import net.minecraft.client.particle.SingleQuadParticle;
-import net.minecraft.client.renderer.culling.Frustum;
-import java.util.function.Consumer;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -30,6 +36,7 @@ public final class PlaceholderBlockEffects {
 	private static @Nullable ClientLevel level;
 	private static @Nullable ParticleEngine engine;
 	private static @Nullable QuadParticleGroup debris;
+	private static @Nullable ItemPickupParticleGroup pickups;
 	private static @Nullable SoundManager soundManager;
 	private static boolean collecting;
 
@@ -61,6 +68,28 @@ public final class PlaceholderBlockEffects {
 		} finally {
 			collecting = false;
 		}
+	}
+
+	/** Player.tick normally updates this separate cache; fluid sampling alone cannot start swimming. */
+	public static void updateUnderwater(final LocalPlayer player) {
+		boolean previous = player.isUnderWater();
+		boolean underwater = player.isEyeInFluid(FluidTags.WATER);
+		((PlayerAccessor) player).nls$setUnderwater(underwater);
+		if (previous != underwater && !player.isSpectator() && prepare((ClientLevel) player.level())) {
+			track(new SimpleSoundInstance(underwater ? SoundEvents.AMBIENT_UNDERWATER_ENTER : SoundEvents.AMBIENT_UNDERWATER_EXIT,
+				SoundSource.AMBIENT, 1.0F, 1.0F, SoundInstance.createUnseededRandom(), player.blockPosition()));
+		}
+	}
+
+	/** Vanilla's three-tick item flight, isolated from the frozen outgoing particle groups. */
+	public static void pickup(final Entity item, final LocalPlayer player) {
+		if (!(item.level() instanceof ClientLevel world) || !prepare(world)) return;
+		if (pickups == null) pickups = new ItemPickupParticleGroup(engine);
+		var state = Minecraft.getInstance().getEntityRenderDispatcher().extractEntity(item, 1.0F);
+		pickups.add(new ItemPickupParticle(world, state, player, item.getDeltaMovement()));
+		track(new SimpleSoundInstance(SoundEvents.ITEM_PICKUP, SoundSource.PLAYERS, 0.2F,
+			(item.getRandom().nextFloat() - item.getRandom().nextFloat()) * 1.4F + 2.0F,
+			SoundInstance.createUnseededRandom(), item.blockPosition()));
 	}
 
 	/** Plays the normal transition sound and keeps its splash particles on the live local clock. */
@@ -113,18 +142,20 @@ public final class PlaceholderBlockEffects {
 	public static void tick() {
 		if (!bound()) return;
 		if (debris != null) debris.tickParticles();
+		if (pickups != null) pickups.tickParticles();
 		// Saving/resource waits do not run Minecraft.tick. Maintain audio only, including completed
 		// channel cleanup; outgoing entity/ambient sounds were already stopped during adoption.
 		if (LoadingWaitLoop.active()) soundManager.tick(false);
 		sounds.removeIf(sound -> !soundManager.isActive(sound));
 	}
 
-	public static void extract(final ParticleEngine target, final Camera camera, final Consumer<QuadParticleGroup> output) {
+	public static void extract(final ParticleEngine target, final Camera camera, final Consumer<ParticleGroup<?>> output) {
 		if (target != engine || !bound()) return;
 		if (LoadingWaitLoop.active()) soundManager.updateSource(camera);
 		if (debris != null && !debris.isEmpty()) {
 			output.accept(debris);
 		}
+		if (pickups != null && !pickups.isEmpty()) output.accept(pickups);
 	}
 
 	/** Also called by vanilla particle clearing (world changes and resource-pack reloads). */
@@ -135,6 +166,7 @@ public final class PlaceholderBlockEffects {
 	public static void clear() {
 		collecting = false;
 		debris = null;
+		pickups = null;
 		level = null;
 		engine = null;
 		try {

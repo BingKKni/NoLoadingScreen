@@ -753,6 +753,8 @@ public final class PlaceholderWorld {
 		if (movement.horizontalCollision() && !flying) controls.stopSprinting();
 		localPlayer.setPos(movement.x(1), movement.y(1), movement.z(1));
 		localPlayer.setOnGround(movement.onGround());
+		// Splash volume must use local motion, not the outgoing server player's frozen velocity.
+		localPlayer.setDeltaMovement(movement.x(1) - movement.x(0), movement.y(1) - movement.y(0), movement.z(1) - movement.z(0));
 		updatePose(localPlayer);
 		((LivingEntityAccessor) localPlayer).nls$updateSwimAmount();
 		PlaceholderVisuals.tick(localPlayer,
@@ -784,6 +786,7 @@ public final class PlaceholderWorld {
 
 	private static void updatePose(final LocalPlayer localPlayer) {
 		PlayerEnvironment.sampleFluids(localPlayer);
+		PlaceholderBlockEffects.updateUnderwater(localPlayer);
 		localPlayer.updateSwimming(); // vanilla explicitly clears swimming during ability flight
 		PlayerAccessor pose = (PlayerAccessor) localPlayer;
 		((LocalPlayerAccessor) localPlayer).nls$setCrouching(!localPlayer.getAbilities().flying

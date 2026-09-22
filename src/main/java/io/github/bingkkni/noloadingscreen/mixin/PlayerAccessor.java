@@ -11,6 +11,7 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 
 @Mixin(Player.class)
 public interface PlayerAccessor {
+	@Accessor("wasUnderwater") void nls$setUnderwater(boolean underwater);
 	@Invoker("updatePlayerPose") void nls$updatePlayerPose();
 	@Invoker("canPlayerFitWithinBlocksAndEntitiesWhen") boolean nls$canFit(Pose pose);
 	@Invoker("maybeBackOffFromEdge") Vec3 nls$backOffFromEdge(Vec3 movement, MoverType type);

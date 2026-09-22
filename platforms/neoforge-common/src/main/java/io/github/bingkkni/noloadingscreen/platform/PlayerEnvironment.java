@@ -25,7 +25,7 @@ public final class PlayerEnvironment {
 		entity.nls$setTouchingWater(touching);
 		entity.nls$updateFluidOnEyes();
 		entity.nls$setEyeInWater(subject.isEyeInFluid(FluidTags.WATER));
-		if (previous != touching && !subject.isSpectator()) PlaceholderBlockEffects.splash(subject);
+		if (!previous && touching && !subject.isSpectator()) PlaceholderBlockEffects.splash(subject);
 		return touching;
 	}
 }

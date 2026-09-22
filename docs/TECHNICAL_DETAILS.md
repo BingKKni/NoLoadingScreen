@@ -144,6 +144,10 @@ Sky rendering retains the old world's biomes, clocks and environment attributes.
 
 Only local visual state advances: vanilla crouching/swimming poses, swim interpolation, arm-rotation smoothing, camera eye-height/FOV, walking/bob/cloak state, head/body turning, animation age and completion of captured swings. Ability flight leaves swimming/crouching poses; no custom hand transform is applied. No entity tick or gameplay AI is invoked.
 
+Fluid sampling also synchronizes `Player.wasUnderwater`: `LocalPlayer.isUnderWater()` reads this separate cache, so updating eye-fluid flags alone cannot start swimming. Transitions play vanilla underwater enter/exit sounds, and splash volume uses actual placeholder displacement; leaving water no longer creates an entry splash. Local drops use the packet-free swing entry point. Successful pickups capture vanilla render state before shrinking/removing the item, then run the three-tick attraction animation in a separate `ItemPickupParticleGroup`, sharing local debris extraction, timing and cleanup without thawing outgoing particles.
+
+These fixes are shared across loaders, including corresponding fluid-adapter changes for 26.1.x and NeoForge 1.21. This round validates only `assemble` for all nine release targets, not smoke, GPU or gameplay tests. Each loader still ships one shared JAR for the three 26.1.x game versions.
+
 #### Why This Is Safe for the Server
 
 - Regardless of which listener the placeholder world uses, its underlying `Connection` has **no channel**.
