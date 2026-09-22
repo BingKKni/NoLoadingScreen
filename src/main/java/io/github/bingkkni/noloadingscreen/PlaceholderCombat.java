@@ -5,6 +5,7 @@ import io.github.bingkkni.noloadingscreen.mixin.LivingEntityAccessor;
 import io.github.bingkkni.noloadingscreen.platform.PlayerEnvironment;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.damagesource.CombatRules;
 import net.minecraft.world.effect.MobEffects;
@@ -120,7 +121,7 @@ public final class PlaceholderCombat {
 			float distance = (float) resolved.horizontalDistance();
 			entity.tickCount++;
 			entity.walkAnimation.update(Math.min(distance * 4.0F, 1.0F), 0.4F, 1.0F);
-			if (entity instanceof Player movedPlayer) {
+			if (entity instanceof AbstractClientPlayer movedPlayer) {
 				movedPlayer.avatarState().tick(movedPlayer.position(), resolved);
 				movedPlayer.avatarState().addWalkDistance(distance * 0.6F);
 				movedPlayer.avatarState().updateBob(ground && !inWater ? Math.min(0.1F, distance) : 0.0F);
