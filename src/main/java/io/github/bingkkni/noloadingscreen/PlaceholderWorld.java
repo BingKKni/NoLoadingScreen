@@ -729,9 +729,15 @@ public final class PlaceholderWorld {
 		double friction = placeholderLevel.getBlockState(localPlayer.getBlockPosBelowThatAffectsMyMovement()).getBlock().getFriction();
 		friction = modifiedFriction(friction, PlayerEnvironment.frictionModifier(localPlayer));
 		double airDragModifier = PlayerEnvironment.airDragModifier(localPlayer);
+		boolean inWater = localPlayer.isInWater() && !flying;
+		double waterEfficiency = PlayerEnvironment.waterMovementEfficiency(localPlayer) * (localPlayer.onGround() ? 1.0 : 0.5);
+		double waterSlowdown = localPlayer.isSprinting() ? 0.9 : ((LivingEntityAccessor) localPlayer).nls$waterSlowDown();
+		waterSlowdown += (0.54600006 - waterSlowdown) * waterEfficiency;
+		double waterAcceleration = 0.02 + (walkingSpeed - 0.02) * waterEfficiency;
 		PlaceholderMovement.Physics physics = new PlaceholderMovement.Physics(walkingSpeed, flyingSpeed,
 			((LivingEntityAccessor) localPlayer).nls$jumpPower(), localPlayer.getGravity(), friction,
-			modifiedFriction(0.91, airDragModifier), modifiedFriction(0.98, airDragModifier));
+			modifiedFriction(0.91, airDragModifier), modifiedFriction(0.98, airDragModifier),
+			inWater, waterSlowdown, waterAcceleration);
 		double forward = axis(forwardDown, backwardDown);
 		double strafe = inputEnabled ? axis(minecraft.options.keyLeft.isDown(), minecraft.options.keyRight.isDown()) : 0.0;
 		double inputScale = sneakScale / Math.max(1.0, Math.hypot(forward, strafe));

@@ -614,22 +614,12 @@ final class LoadingVisualVerification {
 		tickWithVisibleHands(hands, player, 1);
 		PlaceholderWorld.handleSafeKeybinds();
 		check(level.getBlockState(target).isAir() && !level.getBlockState(target.south()).isAir(), "Queued press and held tick destroy exactly one block");
-		PlaceholderInteraction interaction = (PlaceholderInteraction) get(PlaceholderWorld.class, null, "interaction");
-		check((long) get(PlaceholderInteraction.class, interaction, "nextHeldBreak") != 0, "A held break arms a monotonic cooldown");
-		// Control expiry explicitly instead of sleeping or depending on the CI machine's speed.
-		set(PlaceholderInteraction.class, interaction, "nextHeldBreak", System.nanoTime() + 60_000_000_000L);
 		for (int tick = 1; tick < 5; tick++) {
 			tickWithVisibleHands(hands, player, 1); PlaceholderWorld.handleSafeKeybinds();
 			check(!level.getBlockState(target.south()).isAir(), "Creative held cadence from the very first tick: " + tick);
 		}
-		check(PlaceholderWorld.bind(), "Catch-up regression binding");
-		try {
-			for (int tick = 0; tick < 10; tick++) { interaction.tick(); interaction.continueAttack(player); }
-		} finally { PlaceholderWorld.unbind(); }
-		check(!level.getBlockState(target.south()).isAir(), "Ten catch-up ticks cannot turn a cold frame into a held-mining burst");
-		set(PlaceholderInteraction.class, interaction, "nextHeldBreak", 0L);
 		tickWithVisibleHands(hands, player, 1); PlaceholderWorld.handleSafeKeybinds();
-		check(level.getBlockState(target.south()).isAir(), "Held mining resumes after both tick and wall-clock cooldowns expire");
+		check(level.getBlockState(target.south()).isAir(), "Held mining resumes as soon as vanilla's tick cooldown expires");
 		attack.setDown(false);
 		PlaceholderWorld.setLocalMode(net.minecraft.world.level.GameType.SURVIVAL);
 		player.setYRot(0);

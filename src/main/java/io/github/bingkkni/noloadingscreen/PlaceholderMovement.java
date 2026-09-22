@@ -11,9 +11,15 @@ public final class PlaceholderMovement {
 		Motion resolve(Motion requested);
 	}
 
-	/** Values from the outgoing player's attributes and block below their feet. */
+	/** Values from the outgoing player's attributes, fluid state and block below their feet. */
 	public record Physics(double walkingSpeed, double flyingSpeed, double jumpPower, double gravity,
-		double friction, double airDrag, double verticalDrag) {}
+		double friction, double airDrag, double verticalDrag, boolean inWater,
+		double waterSlowdown, double waterAcceleration) {
+		public Physics(double walkingSpeed, double flyingSpeed, double jumpPower, double gravity,
+			double friction, double airDrag, double verticalDrag) {
+			this(walkingSpeed, flyingSpeed, jumpPower, gravity, friction, airDrag, verticalDrag, false, 0.8, 0.02);
+		}
+	}
 
 	private double x, y, z;
 	private double oldX, oldY, oldZ;
@@ -70,6 +76,9 @@ public final class PlaceholderMovement {
 		boolean groundedAtStart = this.onGround && !flying;
 		if (flying) {
 			this.velocityY += vertical * physics.flyingSpeed * 3.0;
+		} else if (physics.inWater) {
+			// LivingEntity's jumpInLiquid/goDownInWater pair applies this each held tick.
+			this.velocityY += vertical * 0.04;
 		} else if (jumpDown && this.onGround && this.jumpDelay == 0 && physics.jumpPower > 1.0E-5) {
 			this.velocityY = Math.max(this.velocityY, physics.jumpPower);
 			if (sprinting) {
@@ -85,6 +94,8 @@ public final class PlaceholderMovement {
 		double acceleration;
 		if (flying) {
 			acceleration = physics.flyingSpeed * (sprinting ? 2.0 : 1.0);
+		} else if (physics.inWater) {
+			acceleration = physics.waterAcceleration;
 		} else if (groundedAtStart) {
 			acceleration = physics.walkingSpeed * (sprinting ? 1.3 : 1.0);
 			if (physics.friction > 0.6) acceleration *= 0.216 / Math.pow(physics.friction, 3);
@@ -108,11 +119,18 @@ public final class PlaceholderMovement {
 		if (differs(requested.z, resolved.z)) this.velocityZ = 0.0;
 		if (differs(requested.y, movedY)) this.velocityY = 0.0;
 
-		double drag = physics.airDrag * (groundedAtStart ? physics.friction : 1.0);
-		this.velocityX *= drag;
-		this.velocityZ *= drag;
-		// Vanilla applies walking gravity AFTER movement, and .98 vertical drag, not flight's .6.
-		this.velocityY = flying ? this.velocityY * 0.6 : (this.velocityY - physics.gravity) * physics.verticalDrag;
+		if (physics.inWater && !flying) {
+			this.velocityX *= physics.waterSlowdown;
+			this.velocityZ *= physics.waterSlowdown;
+			this.velocityY *= 0.8;
+			if (!sprinting) this.velocityY -= physics.gravity / 16.0;
+		} else {
+			double drag = physics.airDrag * (groundedAtStart ? physics.friction : 1.0);
+			this.velocityX *= drag;
+			this.velocityZ *= drag;
+			// Vanilla applies walking gravity AFTER movement, and .98 vertical drag, not flight's .6.
+			this.velocityY = flying ? this.velocityY * 0.6 : (this.velocityY - physics.gravity) * physics.verticalDrag;
+		}
 	}
 
 	public boolean onGround() { return this.onGround; }

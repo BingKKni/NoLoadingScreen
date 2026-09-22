@@ -1,5 +1,7 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Invoker;
@@ -14,6 +16,10 @@ public interface LivingEntityAccessor {
 	@Accessor("itemSwapTicker") void nls$setItemSwapTicker(int ticks);
 	@Accessor("swingState") LivingEntity.SwingState nls$swingState();
 	@Invoker("getJumpPower") float nls$jumpPower();
+	@Invoker("getWaterSlowDown") float nls$waterSlowDown();
+	@Invoker("getHurtSound") SoundEvent nls$hurtSound(DamageSource source);
+	@Invoker("getDeathSound") SoundEvent nls$deathSound();
+	@Invoker("getSoundVolume") float nls$soundVolume();
 	@Invoker("updateSwimAmount") void nls$updateSwimAmount();
 	@Invoker("updateInvisibilityStatus") void nls$updateInvisibilityStatus();
 	@Invoker("tickHeadTurn") void nls$tickHeadTurn(float bodyTarget);

@@ -22,13 +22,13 @@ import net.minecraft.world.phys.HitResult;
 public final class PlaceholderInteraction {
 	private int useDelay;
 	private int breakDelay;
-	private long nextHeldBreak;
 	private BlockPos breaking;
 	private net.minecraft.world.level.block.state.BlockState breakingState;
 	private ItemStack breakingTool;
 	private float breakProgress;
+	private int breakTicks;
 
-	public void reset() { this.useDelay = this.breakDelay = 0; this.nextHeldBreak = 0; this.breaking = null; this.breakingState = null; this.breakingTool = null; this.breakProgress = 0; }
+	public void reset() { this.useDelay = this.breakDelay = this.breakTicks = 0; this.breaking = null; this.breakingState = null; this.breakingTool = null; this.breakProgress = 0; }
 	public void tick() { if (this.useDelay > 0) this.useDelay--; if (this.breakDelay > 0) this.breakDelay--; }
 
 	public void stopBreaking(final LocalPlayer player) {
@@ -37,11 +37,11 @@ public final class PlaceholderInteraction {
 		breakingState = null;
 		breakingTool = null;
 		breakProgress = 0;
+		breakTicks = 0;
 	}
 
 	public void continueAttack(final LocalPlayer player) {
-		if (!PlaceholderWorld.owns(player) || player.isSpectator() || breakDelay > 0
-			|| nextHeldBreak != 0 && System.nanoTime() - nextHeldBreak < 0) return;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || breakDelay > 0) return;
 		if (net.minecraft.client.Minecraft.getInstance().hitResult instanceof net.minecraft.world.phys.EntityHitResult) {
 			stopBreaking(player);
 			return;
@@ -60,15 +60,13 @@ public final class PlaceholderInteraction {
 		}
 		PlaceholderEquipment.update(player);
 		PlayerAnimation.swingAttack(player);
+		if (breakTicks++ % 4 == 0) PlaceholderBlockEffects.hit(level, pos, state);
 		breakProgress += player.isCreative() ? 1 : state.getDestroyProgress(player, level, pos);
 		if (breakProgress >= 1) {
 			breakBlock(player, hit);
 			stopBreaking(player);
 			breakDelay = 5;
-			// A cold frame can run ten catch-up ticks before presenting anything. Do not turn
-			// those ticks into several visually simultaneous held breaks after a handoff.
-			nextHeldBreak = System.nanoTime() + 250_000_000L;
-		} else level.destroyBlockProgress(player.getId(), pos, (int) (breakProgress * 10) - 1);
+		} else level.destroyBlockProgress(player.getId(), pos, (int) (breakProgress * 10));
 	}
 
 	public void attack(final LocalPlayer player) {
@@ -81,10 +79,7 @@ public final class PlaceholderInteraction {
 			PlaceholderCombat.attack(player, hit.getEntity());
 			return;
 		}
-		if (player.isCreative()) { // fresh clicks remain immediate; held mining cannot reset either gate
-			breakDelay = 0;
-			nextHeldBreak = 0;
-		}
+		if (player.isCreative()) breakDelay = 0; // fresh creative clicks remain immediate
 		continueAttack(player);
 	}
 
@@ -95,7 +90,8 @@ public final class PlaceholderInteraction {
 		if (!level.isLoaded(pos) || level.isOutsideBuildHeight(pos)
 			|| player.blockActionRestricted(level, pos, PlaceholderWorld.localMode())) return false;
 		var state = level.getBlockState(pos);
-		if (!player.isCreative() && state.getDestroySpeed(level, pos) < 0) return false;
+		if (!player.getMainHandItem().canDestroyBlock(state, level, pos, player)
+			|| !player.isCreative() && state.getDestroySpeed(level, pos) < 0) return false;
 		// No server loot/durability callbacks. Client updates invalidate retained meshes,
 		// including Sodium's normal hooks. Failed/air edits must not produce phantom feedback.
 		if (state.isAir() || !level.setBlock(pos, state.getFluidState().createLegacyBlock(), Block.UPDATE_ALL | Block.UPDATE_IMMEDIATE)) return false;
