@@ -1,6 +1,11 @@
 package io.github.bingkkni.noloadingscreen.mixin;
 
 import com.mojang.brigadier.ParseResults;
+import com.mojang.brigadier.CommandDispatcher;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import io.github.bingkkni.noloadingscreen.ClientCommands;
 import com.mojang.brigadier.suggestion.Suggestions;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.PlaceholderCommands;
@@ -15,8 +20,6 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(CommandSuggestions.class)
 public abstract class CommandSuggestionsMixin {
@@ -29,16 +32,31 @@ public abstract class CommandSuggestionsMixin {
 	@Shadow public abstract void hide();
 	@Shadow public abstract void showSuggestions(boolean narrate);
 
-	@Inject(method = "updateCommandInfo", at = @At("HEAD"), cancellable = true)
-	private void nls$localSuggestions(final CallbackInfo ci) {
-		if (!NoLoadingScreen.isLoading()) return;
-		ci.cancel();
+	@WrapMethod(method = "updateCommandInfo")
+	private void nls$localSuggestions(final Operation<Void> original) {
+		if (!NoLoadingScreen.isLoading() && !ClientCommands.owns(input.getValue())) {
+			original.call();
+			return;
+		}
 		currentParse = null;
 		commandUsage.clear();
 		if (keepSuggestions) return;
 		input.setSuggestion(null);
 		hide();
-		pendingSuggestions = PlaceholderCommands.suggest(input.getValue(), input.getCursorPosition());
+		String text = input.getValue();
+		int cursor = input.getCursorPosition();
+		pendingSuggestions = PlaceholderCommands.suggest(text, cursor).thenCombine(ClientCommands.suggest(text, cursor),
+			(local, global) -> Suggestions.merge(text, List.of(local, global)));
 		if (allowSuggestions && Minecraft.getInstance().options.autoSuggestions().get()) showSuggestions(false);
+	}
+
+	/** Merge root-prefix completions; do not hide unrelated server or other mod commands. */
+	@WrapOperation(method = "updateCommandInfo", at = @At(value = "INVOKE",
+		target = "Lcom/mojang/brigadier/CommandDispatcher;getCompletionSuggestions(Lcom/mojang/brigadier/ParseResults;I)Ljava/util/concurrent/CompletableFuture;"))
+	private CompletableFuture<Suggestions> nls$mergeClientSuggestions(CommandDispatcher<ClientSuggestionProvider> dispatcher,
+		ParseResults<ClientSuggestionProvider> parse, int cursor, Operation<CompletableFuture<Suggestions>> original) {
+		String text = input.getValue();
+		return original.call(dispatcher, parse, cursor).thenCombine(ClientCommands.suggest(text, cursor),
+			(remote, local) -> Suggestions.merge(text, List.of(remote, local)));
 	}
 }

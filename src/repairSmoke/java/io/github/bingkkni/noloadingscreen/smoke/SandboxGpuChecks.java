@@ -103,6 +103,11 @@ public final class SandboxGpuChecks {
 			check(!drop.isRemoved() && player.getMainHandItem().getCount() == 2, "Pickup delay prevents immediate re-collection");
 			drop.setPos(player.position()); PlaceholderItems.tick(player);
 			check(drop.isRemoved() && player.getMainHandItem().getCount() == 3, "Dropped components/stack are picked up locally");
+			check(player.getMainHandItem().getPopTime() == 5, "Pickup starts the vanilla hotbar pop animation");
+			for (int time = 4; time >= 0; time--) {
+				PlaceholderItems.tick(player);
+				check(player.getMainHandItem().getPopTime() == time, "Hotbar pop advances once per local tick: " + time);
+			}
 			ItemEntity retainedDrop = new ItemEntity(client.level, player.getX(), player.getY(), player.getZ(), new ItemStack(Items.GOLD_INGOT));
 			retainedDrop.setId(-10001); retainedDrop.setPickUpDelay(3); client.level.addEntity(retainedDrop);
 			PlaceholderItems.tick(player); PlaceholderItems.tick(player);
@@ -116,8 +121,8 @@ public final class SandboxGpuChecks {
 			PlaceholderWorld.setLocalMode(GameType.SPECTATOR);
 			check(PlaceholderWorld.playerNames().contains("SandboxTarget") && PlaceholderWorld.teleportToPlayer("SandboxTarget"), "Spectator can select and teleport to a retained player");
 			check(player.position().equals(targetPlayer.position()), "Spectator teleport uses the captured player position");
-			targetPlayer.discard();
 			PlaceholderWorld.setLocalMode(GameType.SURVIVAL);
+			verifyCombat(client, player, targetPlayer);
 			Object beforeSimulation = WaveyCapesCompatibility.capture(player);
 			java.util.List<Vec3> beforePoints = capePoints(beforeSimulation);
 			for (int i = 0; i < 20; i++) {
@@ -158,6 +163,49 @@ public final class SandboxGpuChecks {
 			NoLoadingScreen.LOGGER.info("SandboxGpuChecks PASSED: {} assertions.", checks);
 		} finally { NoLoadingScreenConfig.get().allowFlightAndNoclip = false; PlaceholderWorld.unbind(); }
 	}
+	private static void verifyCombat(Minecraft client, LocalPlayer player, net.minecraft.client.player.RemotePlayer target) throws Exception {
+		player.getInventory().clearContent();
+		player.setYRot(0);
+		for (int i = 0; i < 30; i++) PlaceholderVisuals.tick(player, 0, 0, 0);
+		// Real PlayerInfo game modes, not an invented NPC attribute or server query.
+		var info = new net.minecraft.client.multiplayer.PlayerInfo(target.getGameProfile(), false);
+		var infoField = net.minecraft.client.player.AbstractClientPlayer.class.getDeclaredField("playerInfo");
+		infoField.setAccessible(true); infoField.set(target, info);
+		var modeField = net.minecraft.client.multiplayer.PlayerInfo.class.getDeclaredField("gameMode");
+		modeField.setAccessible(true);
+		target.setPos(player.position().add(1, 0, 1));
+		target.setHealth(2); target.setOnGround(true); target.setDeltaMovement(Vec3.ZERO);
+		for (GameType mode : new GameType[]{GameType.CREATIVE, GameType.SPECTATOR}) {
+			modeField.set(info, mode);
+			check(!PlaceholderCombat.attack(player, target) && target.getHealth() == 2 && target.hurtTime == 0,
+				"Synced NPC mode is not damageable: " + mode);
+		}
+		modeField.set(info, GameType.SURVIVAL);
+		target.getAbilities().invulnerable = true;
+		check(!PlaceholderCombat.attack(player, target), "Known invulnerability is respected");
+		target.getAbilities().invulnerable = false;
+		check(PlaceholderCombat.attack(player, target) && target.getHealth() == 1, "Attack subtracts from last synced health, not max health");
+		check(target.getDeltaMovement().z > 0 && target.getDeltaMovement().y > 0, "Unarmoured grounded entity gets knockback");
+		check(!PlaceholderCombat.attack(player, target) && target.getHealth() == 1, "Same-tick attacks do not bypass hurt immunity");
+		Vec3 before = target.position();
+		PlaceholderCombat.tick();
+		check(!target.position().equals(before) && target.hurtTime == 9, "Knockback and hurt visuals advance without AI ticks");
+		for (int i = 0; i < 30; i++) PlaceholderVisuals.tick(player, 0, 0, 0);
+		target.setPos(player.position().add(1, 0, 1)); target.setOnGround(true); target.setDeltaMovement(Vec3.ZERO);
+		target.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.KNOCKBACK_RESISTANCE).setBaseValue(1);
+		check(PlaceholderCombat.attack(player, target) && target.isDeadOrDying(), "Retained living entity can die locally");
+		check(target.getDeltaMovement().equals(Vec3.ZERO), "Full knockback resistance is preserved");
+		for (int i = 0; i < 20; i++) PlaceholderCombat.tick();
+		check(target.isRemoved(), "Death animation expires and removes only the discarded client entity");
+		client.hitResult = net.minecraft.world.phys.BlockHitResult.miss(player.getEyePosition().add(0, 10, 0), Direction.UP, player.blockPosition().above(10));
+		player.setXRot(-90);
+		new PlaceholderInteraction().attack(player);
+		for (int i = 0; i < 2; i++) PlaceholderVisuals.tick(player, 0, 0, 0);
+		check(io.github.bingkkni.noloadingscreen.platform.PlayerAnimation.swinging(player), "An air attack swings the empty hand");
+		player.setXRot(0);
+		client.hitResult = null;
+	}
+
 	private static java.util.List<Vec3> capePoints(Object simulation) throws Exception {
 		if (simulation == null) return java.util.List.of();
 		Class<?> api = Class.forName("dev.tr7zw.waveycapes.versionless.sim.BasicSimulation");

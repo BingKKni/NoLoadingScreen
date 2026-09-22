@@ -2,9 +2,53 @@
 
 > NeoForge 1.21.10/.11 的独立构建、CLIENT 转换/行为检查、可选模组矩阵及 GPU 冒烟命令见 [NEOFORGE.md](NEOFORGE.md)。下文保留原 Fabric 26.2 证据与实机清单。
 
-本页包含 Minecraft 26.1.x、26.2、26.3 与 NeoForge 1.21.10/1.21.11 的验证记录；26.x 使用 Java 25，1.21.x 使用 Java 21。当前版本：1.1.0。
+本页包含 Minecraft 26.1.x、26.2、26.3 与 NeoForge 1.21.10/1.21.11 的验证记录；26.x 使用 Java 25，1.21.x 使用 Java 21。当前版本：1.2。
 
-## 26.1.x 同一 JAR 跨版本验收
+## 1.2：整合包冷启动、占位交互与客户端指令
+
+### Fabric 26.2 整包排查
+
+本轮提供的目录实际为 `log/26.2 mods`，共 27 个 JAR（含旧 NoLoadingScreen）。逐个读取了模组元数据和 Mixin 配置，并检查了实际 JAR 的相关加载、输入、网络与渲染钩子；没有按“优化模组”标签排除其他模组。测试用当前产物替换旧 NoLoadingScreen，保留其余 26 个 JAR，配置复制到隔离目录，不修改原包。配置中有 FastJoin 等旧文件，但没有对应 JAR，不能仅凭配置名把它们列为本次冲突来源。
+
+**确认的问题是 RRLS 提前宣布启动完成，使 NoLoadingScreen 的 Sodium 预编译在着色器资源就绪前执行。** 旧版整包日志出现 `Couldn't find source ... sodium:blocks/block_layer_opaque` / `Could not warm Sodium terrain pipelines`，而旧实现的 `attempted` 标志让它之后不再尝试。原始整包移除 RRLS 的对照中，预编译正常完成；修复后保留 RRLS 也正常完成（约 31 ms）。改为监听真实 `ReloadInstance.done()` 的成功完成，在客户端线程预编译；失败或已被新重载替代的任务不执行。不关闭 RRLS，不改第三方 JAR，也不绕过其他模组的登录事件。
+
+源码复核使用对应发布标签：[RRLS 26.2-5.2.8](https://github.com/dima-dencep/rrls/tree/26.2-5.2.8)、[Sodium mc26.2-0.9.2](https://github.com/CaffeineMC/sodium/tree/mc26.2-0.9.2)、[Sodium Extra mc26.2-0.9.4](https://github.com/FlashyReese/sodium-extra-fabric/tree/mc26.2-0.9.4)，并与提供的 JAR 对照。ViaFabricPlus 5.0.1、Fabric API 0.160.0 的输入/连接目标，以及 SkyHanni、Skyblocker、Bazaar Utils、翻译/HUD/挖掘进度等模组的重叠目标共同转换、运行通过；这不表示已逐项验收所有第三方功能。
+
+新 `verifyFirstJoinGpu` 真正创建固定种子的单人世界，而非只显示虚空；每次重新启动 JVM，记录首次真实世界出现后的 15 秒。实测环境为 Java 25、Fabric Loader 0.19.5（提供的 Kotlin 包要求该版本）、Intel RaptorLake-S 核显/OpenGL、854×480、视距 8、模拟距离 5、120 FPS 上限、3 GiB 堆。
+
+| 单次冷启动对照 | p95 帧时间 | 最大帧时间 | 超过 50 ms 的帧 |
+|---|---:|---:|---:|
+| 1.1.0 + 完整包/配置 | 16.27 ms | 615.46 ms | 9 |
+| 1.1.0 + 同包但不装 RRLS | 14.27 ms | 446.41 ms | 8 |
+| 本轮 1.2 + 完整包/配置 | 14.02 ms | 406.00 ms | 6 |
+
+**这些是诊断样本，不是性能保证，短暂尖峰仍然存在。** 未清空驱动磁盘缓存，也未进行多轮统计。JFR 在登录包内采到 Fabric 客户端指令注册、SkyHanni 命令构建/反射等首次工作；该同步登录调用在整包运行中约 0.48–0.80 秒，移除 RRLS 的对照也约 0.71 秒。首批世界帧另有渲染/上传、单人存档缩略图读取和 GC；一次采到约 60 ms 的 GC 暂停。不能把这些全部归因于 RRLS，更不能靠关闭模组功能来宣称消除卡顿。没有使用用户账号、用户存档或连接外部服务器，因此真实 Hypixel/跨协议首次进服仍需实机采样。
+
+证据保留在本地忽略目录 `build/investigation/`：`mods.json`、`first-join-baseline.log/.jfr`、`first-join-without-rrls.log/.jfr`、`first-join-fixed-2.log/.jfr`、`pack-final.log`。配置、第三方 JAR、历史聊天日志与 JFR 不提交到 Git。
+
+```bash
+./gradlew verifyOptimizationCompatibility -Ploader_version=0.19.5 -PoptimizationModJars="/path/to/mods"
+./gradlew verifyFirstJoinGpu -Ploader_version=0.19.5 \
+  -PfirstJoinModJars="/path/to/mods" -PfirstJoinConfigDir="/path/to/config" \
+  -PassetsDir="/path/to/assets" -PassetIndex=26.2-32 -PcoldProfile
+# 旧产物对照：追加 -PfirstJoinBaselineJar="/path/to/NoLoadingScreen-1.1.0-Fabric-26.2.jar"
+# 对照只测首次进图，不要求旧产物实现新指令。
+```
+
+此任务仅在 `build/first-join-gpu` 创建带测试名称的存档，不属于常规 `check`。选定资源目录只读；配置复制时不带历史日志。游戏正常关闭时可能出现测试身份的鉴权失败、第三方资源下载失败，以及测试提前离开仍在发区块的世界时的关闭通道日志，不能与断言失败混为一谈。
+
+### 交互与指令验收
+
+- 拾取：只递减背包栈的原版五 tick `popTime`，不调用物品的游戏逻辑 tick。丢出、延迟拾取、动画逐 tick 归零已回归。
+- 空气攻击：未命中也开始本地挥手。创造持续挖掘先消费新按下，再处理持续输入，避免同一 tick “先挖掘、后点击重置延迟”破坏两次；从第一个方块起同时约束五 tick 和至少 250 ms 的单调时钟间隔，防止冷帧补跑多个 tick 时连挖；重新点击仍即时响应。
+- 生物：以接管对象最后收到的同步血量继续计算本地伤害，包含攻击冷却、护甲/韧性、抗性与吸收；击退按属性与碰撞推进，死亡动画 20 tick 后移除客户端对象。不调用服务端伤害、AI、掉落或耐久回调。玩家型 NPC 的已同步创造/旁观模式和已知无敌状态会拒绝攻击；服务器插件没有发送的保护标志、隐藏血量或没有 PlayerInfo 的 NPC 模式无法凭空恢复，不伪造为已知状态。
+- `/nls`、`/noloadingscreen` 打开同一设置界面；`/nlsdebug` 输出 `[NoLoadingScreen] /nlsdebug kick  模拟测试意外被踢时的场景`。根命令、别名与 `kick` 都提供 TAB；正常世界合并而不替换服务器补全。聊天提交和直接 `sendCommand` 都在客户端截获，语法错误不转发服务器。重复整包回归还捕获了同优先级 HEAD 注入的顺序问题：Fabric 在离线派发时可能先访问已经清空的客户端 dispatcher。消息、局部命令和离线补全改用方法包装在原调用链之前处理；无关的在线命令仍完整委托原链，不以调高整个网络 Mixin 优先级来规避。
+- `/nlsdebug kick` 要求模组开启且处于真实世界：单人走原版保存/关服，多人关闭自己的连接，随后保留占位，不回标题页。此显式测试不要求开启 KickWarn 开关，也不修改该设置；占位中再次执行不会嵌套断线。普通“保存退出”仍回原界面。
+- 设置界面纳入共享本地界面策略，加载阶段变化不会误当成取消连接；占位中关闭模组开关也不能把死连接视为真实会话、放行聊天数据包。
+
+无窗口回归覆盖实际 tick/按键处理顺序下的首次双挖掘、后续间隔与补全。`verifyRepairGpu` 的 49 条沙盒断言覆盖拾取缩放、空挥手、血量、击退、死亡和创造/旁观 NPC；完整包还通过真实聊天补全、设置别名和包级 debug 指令拦截。`verifyFirstJoinGpu` 通过真实保存往返：服务端写入 7 个钻石和 13 血量，debug 断开保留 13 血量，将占位物品改为 64 个后重开存档，实际仍为服务端保存的 7 个。原始用户存档未被打开。9 个发布目标的 `build check` 以及同一 26.1.x JAR 在 26.1.1/26.1.2 的额外检查通过，共覆盖 15 个游戏/加载器运行时。Fabric 26.3、NeoForge 1.21.10 另通过共享 GPU 交互/指令回归。最终日志在 `build/investigation/final/`；不能把这些测试表述为实际多人服务器验收。
+
+## 1.1.0：26.1.x 同一 JAR 跨版本验收
 
 26.1、26.1.1、26.1.2 现在每个加载器只发布一份 `26.1.x` JAR。以 26.1 编译一次后，用 `-PtestMinecraftVersion=<游戏版本> -PverificationJar=<已有 JAR>` 运行测试，生产代码编译、资源处理和打包均禁用。测试断言实际 Minecraft 版本、引擎代码来源及加载文件与输入文件逐字节相同，并输出 SHA-256。构建与复现命令见 [VERSIONS.md](VERSIONS.md)。
 
@@ -196,11 +240,11 @@ Sodium 私有钩子现在只对 Minecraft 26.2 当前最新正式版 `0.9.2+mc26
 
 这些是源码核实和无窗口回归，不是已完成真实多人切服/渲染验证的声明。
 
-测试代码不会被打包进 `build/libs/NoLoadingScreen-1.1.0-Fabric-26.2.jar`。测试使用的模拟连接不能代替真实代理服务器、资源包及其他 Mod 的兼容性测试。
+测试代码不会被打包进 `build/libs/NoLoadingScreen-1.2-Fabric-26.2.jar`。测试使用的模拟连接不能代替真实代理服务器、资源包及其他 Mod 的兼容性测试。
 
 ## 实机回归清单
 
-安装测试时移除旧 jar，改用 `NoLoadingScreen-1.1.0-Fabric-26.2.jar`，不要同时保留两个副本。以下场景应在自己有权限的测试服务器上进行。
+安装测试时移除旧 jar，改用 `NoLoadingScreen-1.2-Fabric-26.2.jar`，不要同时保留两个副本。以下场景应在自己有权限的测试服务器上进行。
 
 1. **成功切服**：进入子服后切换到另一子服，等待时可以转动视角；新世界到达后使用服务器提供的位置，不保留占位移动结果。
 2. **切服失败 / KickWarn**：使用 ViaFabricPlus 选择主服支持、目标子服不支持的版本，或让配置阶段拒绝加入。收到断线事件后应立即保留可操作占位，聊天栏显示红色「无法连接到服务器: 」和原始原因，不等 30 秒、不弹出断线页。等待超过一分钟仍留在占位。服务器只是不响应时，仍等待原版网络超时，不伪造被踢消息。

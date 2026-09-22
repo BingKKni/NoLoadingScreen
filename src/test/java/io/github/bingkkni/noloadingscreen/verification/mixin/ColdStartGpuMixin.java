@@ -10,7 +10,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Minecraft.class)
 public abstract class ColdStartGpuMixin {
 	@Inject(method = "runTick", at = @At("RETURN"))
-	private void nls$verifyColdGpuFrame(final boolean advanceGameTime, final CallbackInfo ci) {
-		if (Boolean.getBoolean("nls.verify.coldStartGpu")) ColdStartGpuVerification.afterFrame((Minecraft) (Object) this);
+	private void nls$verifyColdGpuFrame(final boolean advanceGameTime, final CallbackInfo ci) throws Exception {
+		if (Boolean.getBoolean("nls.verify.firstJoinGpu")) io.github.bingkkni.noloadingscreen.verification.FirstJoinGpuVerification.afterFrame((Minecraft) (Object) this);
+		else if (Boolean.getBoolean("nls.verify.coldStartGpu")) ColdStartGpuVerification.afterFrame((Minecraft) (Object) this);
 	}
 }

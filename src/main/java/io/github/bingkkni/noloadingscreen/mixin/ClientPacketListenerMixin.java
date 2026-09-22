@@ -56,14 +56,19 @@ public abstract class ClientPacketListenerMixin {
 		NoLoadingScreen.retireOutgoingLightQueue(this.level);
 	}
 
-	@Inject(method = "sendChat", at = @At("HEAD"), cancellable = true)
-	private void nls$blockChatPacket(final String message, final CallbackInfo ci) {
-		if (NoLoadingScreen.blockOutgoingMessage(false)) ci.cancel();
+	@WrapMethod(method = "sendChat")
+	private void nls$blockChatPacket(final String message, final Operation<Void> original) {
+		if (!NoLoadingScreen.blockOutgoingMessage(false)) original.call(message);
 	}
 
-	@Inject(method = "sendCommand", at = @At("HEAD"), cancellable = true)
-	private void nls$blockCommandPacket(final String command, final CallbackInfo ci) {
-		if (NoLoadingScreen.blockOutgoingMessage(true)) ci.cancel();
+	@WrapMethod(method = "sendCommand")
+	private void nls$blockCommandPacket(final String command, final Operation<Void> original) {
+		// Run before HEAD injections: Fabric's client dispatcher may already be null after
+		// disconnect. Equal-priority cancellable injections have no stable execution order.
+		if (io.github.bingkkni.noloadingscreen.ClientCommands.execute("/" + command)
+			|| io.github.bingkkni.noloadingscreen.PlaceholderCommands.execute("/" + command)
+			|| NoLoadingScreen.blockOutgoingMessage(true)) return;
+		original.call(command);
 	}
 
 	/**

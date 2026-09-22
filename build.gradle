@@ -244,3 +244,4 @@ apply from: 'gradle/verify-modern-artifact.gradle'
 ext.loaderName = 'Fabric'
 ext.repairSmokeLayers = [file('src/repairSmoke/java')]
 apply from: 'gradle/repair-gpu.gradle'
+apply from: 'gradle/first-join-gpu.gradle'

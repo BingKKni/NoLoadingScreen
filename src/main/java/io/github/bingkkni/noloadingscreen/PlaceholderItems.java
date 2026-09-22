@@ -42,6 +42,12 @@ public final class PlaceholderItems {
 
 	public static void tick(LocalPlayer player) {
 		if (!PlaceholderWorld.owns(player)) return;
+		// Inventory.add starts the five-tick hotbar pop. Do not run Inventory.tick: item
+		// gameplay callbacks belong to the server, only this visual counter belongs here.
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			if (stack.getPopTime() > 0) stack.setPopTime(stack.getPopTime() - 1);
+		}
 		var iterator = items.entrySet().iterator();
 		while (iterator.hasNext()) {
 			var entry = iterator.next();

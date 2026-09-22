@@ -11,32 +11,9 @@ import net.minecraft.world.phys.Vec3;
 /** Visual-only pieces of the vanilla player tick. Never calls tick, aiStep, move or sends packets. */
 public final class PlaceholderVisuals {
 	private PlaceholderVisuals() {}
-	private static final java.util.Map<net.minecraft.world.entity.LivingEntity, Integer> hitAnimations = new java.util.IdentityHashMap<>();
-
-	public static void hit(net.minecraft.world.entity.LivingEntity entity) {
-		hitAnimations.putIfAbsent(entity, entity.hurtTime);
-		entity.hurtTime = entity.hurtDuration = 10;
-	}
-
-	public static void clearHits() {
-		hitAnimations.forEach((entity, oldTime) -> entity.hurtTime = oldTime);
-		hitAnimations.clear();
-	}
-
-	private static void tickHits() {
-		var iterator = hitAnimations.entrySet().iterator();
-		while (iterator.hasNext()) {
-			var entry = iterator.next();
-			if (--entry.getKey().hurtTime <= 0) {
-				entry.getKey().hurtTime = entry.getValue();
-				iterator.remove();
-			}
-		}
-	}
-
 	/** Deltas are collision-resolved simulation movement, never per-frame interpolated positions. */
 	public static void tick(final LocalPlayer player, final double dx, final double dy, final double dz) {
-		tickHits();
+		PlaceholderCombat.tick();
 		Vec3 motion = new Vec3(dx, dy, dz);
 		float distance = (float) motion.horizontalDistance();
 		player.setDeltaMovement(motion);
@@ -47,7 +24,10 @@ public final class PlaceholderVisuals {
 		player.walkAnimation.update(Math.min(distance * 4.0F, 1.0F), 0.4F, 1.0F);
 
 		LivingEntityAccessor visuals = (LivingEntityAccessor) player;
+		// Read both before writing: 1.21.10 uses the same field for attack and equip progress.
+		int attackTicks = visuals.nls$attackStrengthTicker();
 		visuals.nls$setItemSwapTicker(visuals.nls$itemSwapTicker() + 1);
+		visuals.nls$setAttackStrengthTicker(attackTicks + 1);
 		trackMainHandItem(player, visuals);
 		PlayerAnimation.tickSwing(player); // finish a captured swing rather than hold its pose forever
 		if (player.hurtTime > 0) player.hurtTime--;

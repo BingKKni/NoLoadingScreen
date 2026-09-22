@@ -1,4 +1,7 @@
 {
+  "noloadingscreen.command.debugHelp": "[NoLoadingScreen] /%s kick  模拟测试意外被踢时的场景",
+  "noloadingscreen.command.kickReason": "NoLoadingScreen：模拟意外断开连接",
+  "noloadingscreen.command.kickUnavailable": "[NoLoadingScreen] 请先启用模组并进入世界，再测试意外断开连接。",
 	"noloadingscreen.options.title": "NoLoadingScreen 设置",
 	"noloadingscreen.option.enabled": "启用 Mod",
 	"noloadingscreen.option.enabled.tooltip": "是否启用模组功能。",

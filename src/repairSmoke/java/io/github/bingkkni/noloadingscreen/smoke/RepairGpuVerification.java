@@ -17,14 +17,12 @@ import java.util.List;
 import net.minecraft.client.Camera;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -112,12 +110,14 @@ public final class RepairGpuVerification {
 				enter(Stage.KICK);
 			}
 			case KICK -> {
-				io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig.get().retainWorldOnKick = true;
+				io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig.get().retainWorldOnKick = false;
 				NoLoadingScreen.onPreparingResources();
 				check(PlaceholderWorld.active(), "Second synthetic world constructed");
 				promoteToLiveSession(client);
-				runInsideTask(client, () -> client.disconnect(new DisconnectedScreen(new TitleScreen(),
-					Component.literal("Isolated kick"), Component.literal("Repair regression")), false));
+				NoLoadingScreen.onDisconnected(); // finish the fixture's synthetic join phase, keep its live fields
+				player.connection.sendCommand("nlsdebug kick"); // exercise the packet-level local command interception
+				runInsideTask(client, io.github.bingkkni.noloadingscreen.ClientCommands::runPending);
+				check(!io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig.get().retainWorldOnKick, "Debug retention does not modify user settings");
 				check(DisconnectedWorldView.visible(), "Real disconnect retains KickWarn scene");
 				check(!player.connection.getConnection().isConnected(), "Offline connection has no live channel");
 				check(ClientUi.screen(client) == null, "KickWarn hides the disconnect screen");
@@ -173,12 +173,15 @@ public final class RepairGpuVerification {
 				check(ClientUi.screen(client) instanceof LoadingInventoryScreen, "Actual inventory frames survived");
 				ClientUi.setScreen(client, null);
 				client.options.setCameraType(CameraType.FIRST_PERSON);
-				ClientUi.setScreen(client, new io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen(null));
+				openSettingsWithCommand(client, "/nls");
 				enter(Stage.OPTIONS);
 			}
 			case OPTIONS -> {
 				if (now - stageStart < 1_000_000_000L) return;
 				check(ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen, "New options and timeout slider render in the real client");
+				ClientUi.screen(client).onClose();
+				openSettingsWithCommand(client, "/noloadingscreen");
+				check(ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen, "Alias opens the same settings UI");
 				ClientUi.screen(client).onClose();
 				frameTimes.sort(Double::compare);
 				NoLoadingScreen.LOGGER.info("Repair GPU frames={} p50={}ms p95={}ms max={}ms (scripted transitions included, not gameplay FPS)",
@@ -192,6 +195,25 @@ public final class RepairGpuVerification {
 			}
 			default -> throw new IllegalStateException(stage.name());
 		}
+	}
+
+	private static void openSettingsWithCommand(Minecraft client, String command) throws Exception {
+		check(PlaceholderWorld.bind(), "Chat command binding");
+		try { ClientUi.openChat(client, net.minecraft.client.gui.components.ChatComponent.ChatMethod.COMMAND); }
+		finally { PlaceholderWorld.unbind(); }
+		var chat = (net.minecraft.client.gui.screens.ChatScreen) ClientUi.screen(client);
+		var input = (net.minecraft.client.gui.components.EditBox) get(chat.getClass(), chat, "input");
+		var suggestions = (net.minecraft.client.gui.components.CommandSuggestions) get(chat.getClass(), chat, "commandSuggestions");
+		input.setValue("/nlsdebug k");
+		suggestions.updateCommandInfo();
+		@SuppressWarnings("unchecked")
+		var pending = (java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>)
+			get(suggestions.getClass(), suggestions, "pendingSuggestions");
+		check(pending.join().getList().stream().anyMatch(s -> s.getText().equals("kick")), "Real chat offers local debug TAB completion");
+		chat.handleChatInput(command, true);
+		check(ClientUi.screen(client) == chat, "Settings opening waits until chat submission closes its screen");
+		chat.onClose();
+		io.github.bingkkni.noloadingscreen.ClientCommands.runPending();
 	}
 
 	/** Frames the 26.x save loop draws with renderFrame(false); they never return through runTick. */

@@ -5,8 +5,6 @@ import io.github.bingkkni.noloadingscreen.platform.SceneFactory;
 import io.github.bingkkni.noloadingscreen.platform.SceneRenderer;
 import io.github.bingkkni.noloadingscreen.platform.PlayerEnvironment;
 import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
-import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
-import net.minecraft.client.gui.screens.ChatScreen;
 import io.github.bingkkni.noloadingscreen.mixin.AvatarAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.ClientCommonPacketListenerImplAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.EntityAccessor;
@@ -479,12 +477,11 @@ public final class PlaceholderWorld {
 		client.options.keyAttack.setDown(false);
 		client.options.keyUse.setDown(false);
 		discardQueuedClicks();
-		if (ClientUi.screen(client) instanceof LoadingInventoryScreen || ClientUi.screen(client) instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || ClientUi.screen(client) instanceof LoadingPauseScreen
-			|| ClientUi.screen(client) instanceof ChatScreen) ClientUi.setScreen(client, null);
+		if (ScreenTransitions.isLocalScreen(ClientUi.screen(client))) ClientUi.setScreen(client, null);
 		releaseAll();
 		PlaceholderBlockEffects.clear();
 		PlaceholderItems.clear();
-		PlaceholderVisuals.clearHits();
+		PlaceholderCombat.clear();
 		PlaceholderEquipment.clear();
 		installed = false;
 		synthetic = false;
@@ -760,6 +757,7 @@ public final class PlaceholderWorld {
 		interaction.tick();
 		if (!minecraft.options.keyAttack.isDown() || ClientUi.screen(minecraft) != null
 			|| ClientUi.overlay(minecraft) != null || !minecraft.isWindowActive()) interaction.stopBreaking(localPlayer);
+		else if (consumeClicks(minecraft.options.keyAttack)) interaction.attack(localPlayer);
 		else interaction.continueAttack(localPlayer);
 		PlaceholderItems.tick(localPlayer);
 		PlaceholderBlockEffects.tick();
@@ -841,7 +839,7 @@ public final class PlaceholderWorld {
 
 	/** Remote entities keep their final pose; the controlled player's animation continues. */
 	public static float entityPartialTick(final Entity entity, final float original) {
-		return isBound() ? (entity == player || PlaceholderItems.owns(entity) ? localPartialTick(original) : 1.0F) : original;
+		return isBound() ? (entity == player || PlaceholderItems.owns(entity) || PlaceholderCombat.animating(entity) ? localPartialTick(original) : 1.0F) : original;
 	}
 
 	/** A split clock, not a globally frozen clock: freezing camera alpha quantizes visuals to 20 Hz. */
@@ -879,6 +877,13 @@ public final class PlaceholderWorld {
 				// drain
 			}
 		}
+	}
+
+	/** The tick runs before handleKeybinds; consume a press before attempting held mining. */
+	private static boolean consumeClicks(final KeyMapping key) {
+		boolean pressed = false;
+		while (key.consumeClick()) pressed = true;
+		return pressed;
 	}
 
 	/** Handles the few local UI actions that remain useful while the real connection is paused. */
@@ -940,7 +945,7 @@ public final class PlaceholderWorld {
 				}
 				while (minecraft.options.keySwapOffhand.consumeClick()) PlaceholderInteraction.swapOffhand(player);
 				while (minecraft.options.keyDrop.consumeClick()) PlaceholderItems.dropSelected(player, minecraft.hasControlDown());
-				boolean attack = minecraft.options.keyAttack.consumeClick();
+				boolean attack = consumeClicks(minecraft.options.keyAttack);
 				boolean use = minecraft.options.keyUse.consumeClick();
 				// Fresh presses start local actions; held mining progresses on the 20 Hz scene tick.
 				// Consume vanilla's click queue without replaying it in the incoming session.

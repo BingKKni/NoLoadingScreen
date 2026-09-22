@@ -77,6 +77,9 @@ final class LoadingTransitionsVerification {
 		Screen resources = new GenericMessageScreen(Component.translatable("selectWorld.resource_load"));
 		set(NoLoadingScreen.class, null, "resourceScreen", resources);
 		set(NoLoadingScreen.class, null, "resourcePlaceholderAttempted", true);
+		Screen settings = new io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen(null);
+		NoLoadingScreen.onScreenChanging(settings);
+		check(get(NoLoadingScreen.class, null, "resourceScreen") == resources && PlaceholderWorld.active(), "Opening /nls settings does not cancel resource preparation");
 		player.setYRot(127);
 		player.setXRot(-31);
 		Object movement = get(PlaceholderWorld.class, null, "movement");
@@ -110,6 +113,11 @@ final class LoadingTransitionsVerification {
 			throw new AssertionError("A hidden phase screen must not reinitialize an open local menu");
 		});
 		check(minecraft.gui.screen() == menu && player.getYRot() == 127, "Open local UI and camera are retained across the phase change");
+		set(Gui.class, minecraft.gui, "screen", settings);
+		method(Gui.class, "nls$returnToPlaceholder").invoke(minecraft.gui, loading, (Operation<Void>) args -> {
+			throw new AssertionError("A phase transition must not dismiss /nls settings");
+		});
+		check(minecraft.gui.screen() == settings, "Settings share the local screen retention policy");
 		set(Gui.class, minecraft.gui, "screen", null);
 	}
 

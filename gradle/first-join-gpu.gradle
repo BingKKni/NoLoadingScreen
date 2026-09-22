@@ -1,0 +1,67 @@
+// Fabric 26.2 opt-in cold-join profiling and a real integrated-server save round trip.
+// Never point the game at user saves: supplied mods/configs are copied/read in build/first-join-gpu.
+tasks.register('verifyFirstJoinGpu', JavaExec) {
+    group = 'verification'
+    description = 'Profile an isolated first world join with supplied mods/configs and verify debug save/reopen.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+    maxHeapSize = '3G'
+    timeout = java.time.Duration.ofMinutes(6)
+    workingDir layout.buildDirectory.dir('first-join-gpu')
+    systemProperty 'fabric.development', 'true'
+    systemProperty 'java.awt.headless', 'false'
+    systemProperty 'nls.verify.coldStartGpu', 'true'
+    systemProperty 'nls.verify.firstJoinGpu', 'true'
+    doFirst {
+        def assets = providers.gradleProperty('assetsDir').orNull
+        def index = providers.gradleProperty('assetIndex').orNull
+        if (assets == null || index == null || !file("${assets}/indexes/${index}.json").isFile())
+            throw new GradleException('Supply existing -PassetsDir=... -PassetIndex=...')
+        def baseline = providers.gradleProperty('firstJoinBaselineJar').orNull
+        def mainOutput = sourceSets.main.output
+        if (baseline != null) {
+            if (!file(baseline).isFile()) throw new GradleException('Missing firstJoinBaselineJar')
+            classpath = sourceSets.test.runtimeClasspath - sourceSets.main.output + files(file(baseline))
+            mainOutput = files(file(baseline))
+            systemProperty 'nls.verify.profileOnly', 'true'
+        }
+        systemProperty 'fabric.classPathGroups', [mainOutput, sourceSets.test.output]
+            .collect { it.files.collect { f -> f.absolutePath }.join(File.pathSeparator) }
+            .join(File.pathSeparator + File.pathSeparator)
+        def supplied = providers.gradleProperty('firstJoinModJars').orNull
+        if (supplied != null) {
+            def jars = supplied.split('[,;]', -1).collectMany { token ->
+                if (token.isBlank()) throw new GradleException('Empty firstJoinModJars entry')
+                def path = file(token.trim())
+                if (path.isDirectory()) return fileTree(path) { include '*.jar' }.files.toList()
+                if (!path.isFile()) throw new GradleException("Missing firstJoinModJars entry: ${path}")
+                [path]
+            }.unique().findAll { !it.name.toLowerCase().startsWith('noloadingscreen') }
+            systemProperty 'fabric.addMods', jars.collect { it.absolutePath }.join(File.pathSeparator)
+        }
+        workingDir.mkdirs()
+        def config = providers.gradleProperty('firstJoinConfigDir').orNull
+        if (config != null) {
+            if (!file(config).isDirectory()) throw new GradleException('Missing firstJoinConfigDir')
+            project.copy {
+                from file(config)
+                into new File(workingDir, 'config')
+                exclude '**/logs/**', '**/*.log', '**/*.7z'
+            }
+        }
+        new File(workingDir, 'options.txt').text = 'pauseOnLostFocus:false\nmaxFps:120\nenableVsync:false\nonboardAccessibility:false\nrenderDistance:8\nsimulationDistance:5\n'
+        if (providers.gradleProperty('coldProfile').isPresent())
+            jvmArgs '-XX:StartFlightRecording=filename=first-join.jfr,settings=profile,dumponexit=true'
+        args '--version', project.minecraft_version, '--gameDir', workingDir.absolutePath,
+            '--assetsDir', file(assets).absolutePath, '--assetIndex', index,
+            '--accessToken', '0', '--username', 'NlsFirstJoin', '--width', '854', '--height', '480'
+        def log = new File(workingDir, 'logs/latest.log')
+        if (log.exists()) log.delete()
+    }
+    doLast {
+        def log = new File(workingDir, 'logs/latest.log')
+        if (!log.isFile() || !log.getText('UTF-8').contains('FirstJoinGpuVerification PASSED'))
+            throw new GradleException('First-join client did not complete the isolated world test')
+    }
+}

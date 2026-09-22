@@ -67,7 +67,6 @@ public abstract class MinecraftMixin {
 		Minecraft minecraft = (Minecraft) (Object) this;
 		JoinClassWarmup.prepare();
 		LocalSkinPreloader.preload(minecraft.getUser().getProfileId(), this.profileFuture, minecraft.getSkinManager(), minecraft);
-		SodiumShaderWarmup.prepare();
 		PlaceholderRegistries.preload();
 	}
 

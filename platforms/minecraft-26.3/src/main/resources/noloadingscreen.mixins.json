@@ -47,6 +47,7 @@
 		"ParticleEngineMixin",
 		"SDLEventHandlerMixin",
 		"SkinManagerMixin",
+		"ResourceReloadMixin",
 		"SodiumChunkBuilderMixin",
 		"SodiumChunkJobCollectorMixin",
 		"SodiumRenderSectionManagerMixin",

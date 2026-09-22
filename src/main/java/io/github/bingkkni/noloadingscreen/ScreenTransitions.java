@@ -12,17 +12,23 @@ import net.minecraft.client.gui.screens.LevelLoadingScreen;
 /** Shared screen ownership policy; loader/API mixins only supply vanilla calls. */
 public final class ScreenTransitions {
 	private ScreenTransitions() {}
+
+	public static boolean isLocalScreen(Screen screen) {
+		return screen instanceof LoadingInventoryScreen
+			|| screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen
+			|| screen instanceof LoadingPauseScreen || screen instanceof ChatScreen
+			|| screen instanceof io.github.bingkkni.noloadingscreen.gui.NoLoadingScreenOptionsScreen;
+	}
+
 	public static void setScreen(Screen screen, Operation<Void> original) {
 		// Pack prompts and server dialogs can return to a null parent during configuration.
 		boolean hideSaving = SavingWorldView.visible() && SavingWorldView.isSavingScreen(screen);
 		boolean hideDisconnected = DisconnectedWorldView.hides(screen);
 		boolean hideLoading = NoLoadingScreenConfig.get().enabled && screen instanceof LevelLoadingScreen && PlaceholderWorld.active();
-		if (hideLoading && (ClientUi.screen(Minecraft.getInstance()) instanceof LoadingInventoryScreen
-			|| ClientUi.screen(Minecraft.getInstance()) instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen
-			|| ClientUi.screen(Minecraft.getInstance()) instanceof LoadingPauseScreen || ClientUi.screen(Minecraft.getInstance()) instanceof ChatScreen)) {
+		if (hideLoading && isLocalScreen(ClientUi.screen(Minecraft.getInstance()))) {
 			return; // a phase change must not close/reinitialize the player's local menu either
 		}
-		boolean bound = (screen == null || hideSaving || hideDisconnected || hideLoading) && PlaceholderWorld.bind();
+		boolean bound = (screen == null || hideSaving || hideDisconnected || hideLoading || isLocalScreen(screen)) && PlaceholderWorld.bind();
 		try {
 			Screen next = (hideSaving || hideDisconnected || hideLoading) && bound ? null : screen;
 			if (next == null && !bound && Minecraft.getInstance().level == null) next = NoLoadingScreen.waitingScreen();

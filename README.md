@@ -42,7 +42,7 @@ Choose the matching loader. **The `26.1.x` JAR works on 26.1, 26.1.1 and 26.1.2;
 Pinned loader versions and artifacts for each version are listed in the [version matrix](docs/VERSIONS.md). Fabric requires Loader >=0.19.3 (26.3 was built and tested with 0.19.5).
 
 1. Install [Fabric Loader](https://fabricmc.net/use/installer), [NeoForge](https://neoforged.net/), or [Forge](https://files.minecraftforge.net/) for your target.
-2. Obtain the matching artifact from [Releases](https://github.com/BingKKni/NoLoadingScreen/releases), or build it using the [support/build matrix](docs/VERSIONS.md). All release JARs use the `NoLoadingScreen-version-loader-minecraft.jar` format, for example `NoLoadingScreen-1.1.0-Fabric-26.1.x.jar`.
+2. Obtain the matching artifact from [Releases](https://github.com/BingKKni/NoLoadingScreen/releases), or build it using the [support/build matrix](docs/VERSIONS.md). All release JARs use the `NoLoadingScreen-version-loader-minecraft.jar` format, for example `NoLoadingScreen-1.2-Fabric-26.1.x.jar`.
 3. Place the file in `.minecraft/mods/`.
 
 This mod only needs to be installed on the client. Servers do not need it.

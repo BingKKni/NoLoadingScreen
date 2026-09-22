@@ -3,11 +3,8 @@ package io.github.bingkkni.noloadingscreen;
 import io.github.bingkkni.noloadingscreen.platform.ClientUi;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import io.github.bingkkni.noloadingscreen.platform.WaitFrame;
-import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
-import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import io.github.bingkkni.noloadingscreen.platform.ClientRuntime;
 
@@ -68,6 +65,7 @@ public final class LoadingWaitLoop {
 		pollingInput = true;
 		try {
 			WaitFrame.pollEvents(minecraft);
+			ClientCommands.runPending();
 			if (minecraft.getWindow().shouldClose()) minecraft.stop(); // saving must still finish
 			NoLoadingScreen.tryResourcePlaceholder();
 			long now = ClientRuntime.millis();
@@ -78,8 +76,7 @@ public final class LoadingWaitLoop {
 					for (int i = 0; i < ticks; i++) {
 						PlaceholderWorld.tick();
 						Screen screen = ClientUi.screen(minecraft);
-						if ((screen instanceof LoadingInventoryScreen || screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)
-							&& PlaceholderWorld.bind()) {
+						if (ScreenTransitions.isLocalScreen(screen) && PlaceholderWorld.bind()) {
 							try { screen.tick(); } finally { PlaceholderWorld.unbind(); }
 						}
 					}

@@ -17,7 +17,6 @@ import io.github.bingkkni.noloadingscreen.NoLoadingScreen;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig;
 import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
 import io.github.bingkkni.noloadingscreen.SavingWorldView;
-import io.github.bingkkni.noloadingscreen.compat.SodiumShaderWarmup;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.client.Minecraft;
@@ -72,13 +71,12 @@ public abstract class MinecraftMixin {
 	@Unique private long nls$taskStart;
 	@Unique private int nls$tasksProcessed;
 
-	/** Resources are ready, even when quick play skips the title screen. Never join the profile future. */
+	/** Start account/type warmup even for quick play; GPU warmup waits for the real resource reload. */
 	@Inject(method = "onGameLoadFinished", at = @At("HEAD"))
 	private void nls$preloadSkin(final CallbackInfo ci) {
 		Minecraft minecraft = (Minecraft) (Object) this;
 		JoinClassWarmup.prepare();
 		LocalSkinPreloader.preload(minecraft.getUser().getProfileId(), this.profileFuture, minecraft.getSkinManager(), minecraft);
-		SodiumShaderWarmup.prepare();
 		PlaceholderRegistries.preload();
 	}
 

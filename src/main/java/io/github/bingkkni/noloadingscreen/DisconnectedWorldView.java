@@ -17,6 +17,22 @@ public final class DisconnectedWorldView {
 	private static @Nullable DisconnectedScreen fallback;
 	private static @Nullable OutgoingWorld outgoing;
 	private static ChatComponent.@Nullable State chatState;
+	private static boolean simulatingKick;
+
+	/** Uses vanilla disconnect/save, never a kick command or a server-side player mutation. */
+	public static boolean simulateKick() {
+		Minecraft client = Minecraft.getInstance();
+		if (!NoLoadingScreenConfig.get().enabled || NoLoadingScreen.isLoading() || active()
+			|| client.level == null || client.player == null || client.player.isDeadOrDying()) return false;
+		Component reason = Component.translatable("noloadingscreen.command.kickReason");
+		simulatingKick = true;
+		try {
+			client.getConnection().getConnection().disconnect(reason);
+			client.disconnect(new DisconnectedScreen(new net.minecraft.client.gui.screens.TitleScreen(),
+				Component.translatable("disconnect.lost"), reason), false);
+			return visible();
+		} finally { simulatingKick = false; }
+	}
 
 	private DisconnectedWorldView() {}
 
@@ -32,11 +48,12 @@ public final class DisconnectedWorldView {
 		return active() && PlaceholderWorld.active();
 	}
 
-	/** An intentional exit/transfer and all integrated-server paths remain vanilla. */
+	/** Intentional exits/transfers remain vanilla; only an explicit debug kick can retain a local server. */
 	public static boolean canRetain() {
 		Minecraft minecraft = Minecraft.getInstance();
-		return NoLoadingScreenConfig.get().enabled && NoLoadingScreenConfig.get().retainWorldOnKick && !active() && !minecraft.isLocalServer()
-			&& minecraft.getSingleplayerServer() == null && !SavingWorldView.saving() && !NoLoadingScreen.preparingResources()
+		return NoLoadingScreenConfig.get().enabled && (NoLoadingScreenConfig.get().retainWorldOnKick || simulatingKick) && !active()
+			&& (simulatingKick || !minecraft.isLocalServer() && minecraft.getSingleplayerServer() == null)
+			&& !SavingWorldView.saving() && !NoLoadingScreen.preparingResources()
 			&& (PlaceholderWorld.active() || minecraft.level != null && minecraft.player != null);
 	}
 
@@ -46,6 +63,9 @@ public final class DisconnectedWorldView {
 		outgoing = PlaceholderWorld.active() ? null : OutgoingWorld.capture();
 		chatState = ClientUi.chat(Minecraft.getInstance()).storeState();
 		fallback = disconnected; // retain vanilla's exact details, report links and return destination
+		// Only explicit debug kicks can combine a real integrated-server save and permanent
+		// retention. Normal singleplayer exits still finish at the requested menu.
+		if (simulatingKick && Minecraft.getInstance().getSingleplayerServer() != null) SavingWorldView.capture();
 		return true;
 	}
 

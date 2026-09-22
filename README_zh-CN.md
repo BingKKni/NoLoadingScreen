@@ -42,7 +42,7 @@ NoLoadingScreen 是一个仅客户端运行的 Forge /Fabric / NeoForge Mod。�
 加载器精确版本与各版本产物见[版本矩阵](docs/VERSIONS.md)。Fabric 要求 Loader >=0.19.3（26.3 以 0.19.5 构建和测试）。
 
 1. 安装对应版本的 [Fabric Loader](https://fabricmc.net/use/installer)、[NeoForge](https://neoforged.net/) 或 [Forge](https://files.minecraftforge.net/)。
-2. 从 [Releases](https://github.com/BingKKni/NoLoadingScreen/releases) 获取匹配产物，或按[支持与构建矩阵](docs/VERSIONS.md)自行构建。所有发布 JAR 都使用 `NoLoadingScreen-版本-加载器-Minecraft版本.jar` 格式，例如 `NoLoadingScreen-1.1.0-Fabric-26.1.x.jar`。
+2. 从 [Releases](https://github.com/BingKKni/NoLoadingScreen/releases) 获取匹配产物，或按[支持与构建矩阵](docs/VERSIONS.md)自行构建。所有发布 JAR 都使用 `NoLoadingScreen-版本-加载器-Minecraft版本.jar` 格式，例如 `NoLoadingScreen-1.2-Fabric-26.1.x.jar`。
 3. 将文件放入 `.minecraft/mods/`。
 
 本 Mod 只需安装在客户端，服务器无需安装。

@@ -53,6 +53,7 @@
 		"PacketProcessorMixin",
 		"ParticleEngineMixin",
 		"SkinManagerMixin",
+		"ResourceReloadMixin",
 		"SodiumChunkBuilderMixin",
 		"SodiumChunkJobCollectorMixin",
 		"SodiumRenderSectionManagerMixin",

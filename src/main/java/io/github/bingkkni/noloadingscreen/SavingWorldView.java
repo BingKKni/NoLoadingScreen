@@ -59,7 +59,7 @@ public final class SavingWorldView {
 		outgoing = null;
 		try {
 			// Keep the narrowly scoped local-GUI permission until our inventory/menu has closed.
-			if (ownsPlaceholder) PlaceholderWorld.uninstall();
+			if (ownsPlaceholder && !DisconnectedWorldView.active()) PlaceholderWorld.uninstall();
 		} finally {
 			if (ownsPlaceholder) LoadingWaitLoop.end();
 			ownsPlaceholder = false;

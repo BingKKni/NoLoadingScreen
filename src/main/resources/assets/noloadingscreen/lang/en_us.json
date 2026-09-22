@@ -1,4 +1,7 @@
 {
+  "noloadingscreen.command.debugHelp": "[NoLoadingScreen] /%s kick  Simulate an unexpected disconnect",
+  "noloadingscreen.command.kickReason": "NoLoadingScreen: simulated disconnect",
+  "noloadingscreen.command.kickUnavailable": "[NoLoadingScreen] Enable the mod and enter a world before testing a disconnect.",
 	"noloadingscreen.options.title": "NoLoadingScreen Settings",
 	"noloadingscreen.option.enabled": "Enable Mod",
 	"noloadingscreen.option.enabled.tooltip": "Turn the mod on or off.",

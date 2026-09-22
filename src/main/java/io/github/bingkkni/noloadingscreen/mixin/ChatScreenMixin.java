@@ -7,24 +7,19 @@ import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.screens.ChatScreen;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /** Blocks messages while the outgoing play connection is retained for a server transfer. */
 @Mixin(ChatScreen.class)
 public abstract class ChatScreenMixin {
-	@Inject(method = "handleChatInput", at = @At("HEAD"), cancellable = true)
-	private void nls$blockLoadingChat(final String message, final boolean addToRecent, final CallbackInfo ci) {
-		if (io.github.bingkkni.noloadingscreen.PlaceholderCommands.execute(message.strip())) {
-			ci.cancel();
+	@WrapMethod(method = "handleChatInput")
+	private void nls$blockLoadingChat(final String message, final boolean addToRecent, final Operation<Void> original) {
+		if (io.github.bingkkni.noloadingscreen.ClientCommands.execute(message.strip())
+			|| io.github.bingkkni.noloadingscreen.PlaceholderCommands.execute(message.strip())) {
+			if (addToRecent) io.github.bingkkni.noloadingscreen.platform.ClientUi.chat(net.minecraft.client.Minecraft.getInstance()).addRecentChat(message.strip());
 			return;
 		}
-		if (!message.isBlank() && NoLoadingScreen.blockOutgoingMessage(message.stripLeading().startsWith("/"))) {
-			ci.cancel();
-		} else if (NoLoadingScreen.isLoading()) {
-			ci.cancel();
-		}
+		if (!message.isBlank() && NoLoadingScreen.blockOutgoingMessage(message.stripLeading().startsWith("/"))) return;
+		if (!NoLoadingScreen.isLoading()) original.call(message, addToRecent);
 	}
 
 	@WrapMethod(method = "init")

@@ -8,6 +8,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 /** 26.3 keeps swing progress in a private SwingState instead of the attackAnim fields. */
 @Mixin(LivingEntity.class)
 public interface LivingEntityAccessor {
+	@Accessor("attackStrengthTicker") int nls$attackStrengthTicker();
+	@Accessor("attackStrengthTicker") void nls$setAttackStrengthTicker(int ticks);
 	@Accessor("itemSwapTicker") int nls$itemSwapTicker();
 	@Accessor("itemSwapTicker") void nls$setItemSwapTicker(int ticks);
 	@Accessor("swingState") LivingEntity.SwingState nls$swingState();

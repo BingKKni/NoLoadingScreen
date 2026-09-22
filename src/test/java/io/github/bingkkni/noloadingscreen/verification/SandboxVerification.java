@@ -1,6 +1,7 @@
 package io.github.bingkkni.noloadingscreen.verification;
 
 import io.github.bingkkni.noloadingscreen.CapeState;
+import io.github.bingkkni.noloadingscreen.ClientCommands;
 import io.github.bingkkni.noloadingscreen.NoLoadingScreenConfig;
 import io.github.bingkkni.noloadingscreen.PlaceholderCommands;
 import io.github.bingkkni.noloadingscreen.PlaceholderWorld;
@@ -47,6 +48,11 @@ public final class SandboxVerification {
 		boolean previous = installed.getBoolean(null);
 		try {
 			installed.setBoolean(null, true);
+			boolean enabled = NoLoadingScreenConfig.get().enabled;
+			try {
+				NoLoadingScreenConfig.get().enabled = false;
+				check(io.github.bingkkni.noloadingscreen.NoLoadingScreen.isLoading(), "Disabling the mod inside a retained scene cannot release outgoing-message guards");
+			} finally { NoLoadingScreenConfig.get().enabled = enabled; }
 			for (String mode : new String[]{"survival", "creative", "adventure", "spectator"}) {
 				String text = "/gamemode " + mode.substring(0, 2);
 				check(PlaceholderCommands.suggest(text, text.length()).join().getList().stream().anyMatch(s -> s.getText().equals(mode)), "Local TAB completion: " + mode);
@@ -55,6 +61,15 @@ public final class SandboxVerification {
 			installed.setBoolean(null, false);
 			check(PlaceholderCommands.suggest("/gamemode c", 11).join().isEmpty(), "Local dispatcher never replaces the live server dispatcher");
 		} finally { installed.setBoolean(null, previous); }
+		for (String root : new String[]{"nls", "noloadingscreen", "nlsdebug"}) {
+			check(ClientCommands.owns("/" + root) && ClientCommands.owns("/" + root + " invalid"), "Local command ownership: " + root);
+			check(!ClientCommands.owns("/" + root + "other"), "No prefix hijack: " + root);
+			check(ClientCommands.suggest("/n", 2).join().getList().stream().anyMatch(s -> s.getText().equals(root)), "Live root TAB: " + root);
+		}
+		check(ClientCommands.suggest("/nlsdebug k", 11).join().getList().stream().anyMatch(s -> s.getText().equals("kick")), "Debug subcommand TAB");
+		check(ClientCommands.suggest("/gamemode ", 10).join().isEmpty(), "Live server command suggestions remain remote");
+		check(ClientCommands.suggest("/nls", 0).join().isEmpty(), "Cursor before slash is safe");
+		check(!ClientCommands.execute("/say unchanged"), "Unrelated commands are not intercepted");
 		System.out.println("SandboxVerification: " + assertions + " assertions passed (defaults, bounds, cape continuity, local completions).");
 	}
 	private static void near(Vec3 actual, Vec3 expected, String message) { check(actual.distanceTo(expected) < 1.0E-5, message); }

@@ -22,12 +22,13 @@ import net.minecraft.world.phys.HitResult;
 public final class PlaceholderInteraction {
 	private int useDelay;
 	private int breakDelay;
+	private long nextHeldBreak;
 	private BlockPos breaking;
 	private net.minecraft.world.level.block.state.BlockState breakingState;
 	private ItemStack breakingTool;
 	private float breakProgress;
 
-	public void reset() { this.useDelay = this.breakDelay = 0; this.breaking = null; this.breakingState = null; this.breakingTool = null; this.breakProgress = 0; }
+	public void reset() { this.useDelay = this.breakDelay = 0; this.nextHeldBreak = 0; this.breaking = null; this.breakingState = null; this.breakingTool = null; this.breakProgress = 0; }
 	public void tick() { if (this.useDelay > 0) this.useDelay--; if (this.breakDelay > 0) this.breakDelay--; }
 
 	public void stopBreaking(final LocalPlayer player) {
@@ -39,7 +40,8 @@ public final class PlaceholderInteraction {
 	}
 
 	public void continueAttack(final LocalPlayer player) {
-		if (!PlaceholderWorld.owns(player) || player.isSpectator() || breakDelay > 0) return;
+		if (!PlaceholderWorld.owns(player) || player.isSpectator() || breakDelay > 0
+			|| nextHeldBreak != 0 && System.nanoTime() - nextHeldBreak < 0) return;
 		if (net.minecraft.client.Minecraft.getInstance().hitResult instanceof net.minecraft.world.phys.EntityHitResult) {
 			stopBreaking(player);
 			return;
@@ -63,21 +65,26 @@ public final class PlaceholderInteraction {
 			breakBlock(player, hit);
 			stopBreaking(player);
 			breakDelay = 5;
+			// A cold frame can run ten catch-up ticks before presenting anything. Do not turn
+			// those ticks into several visually simultaneous held breaks after a handoff.
+			nextHeldBreak = System.nanoTime() + 250_000_000L;
 		} else level.destroyBlockProgress(player.getId(), pos, (int) (breakProgress * 10) - 1);
 	}
 
 	public void attack(final LocalPlayer player) {
 		if (!PlaceholderWorld.owns(player) || player.isSpectator()) return;
-		// Snapshot entities remain entities, not blocks. Give local hit feedback without attack packets.
+		// A miss still swings. Never call LocalPlayer's packet-sending attack path.
+		PlayerAnimation.swingAttack(player);
 		var target = net.minecraft.client.Minecraft.getInstance().hitResult;
 		if (target instanceof net.minecraft.world.phys.EntityHitResult hit) {
-			PlayerAnimation.swingAttack(player);
-			if (hit.getEntity() instanceof net.minecraft.world.entity.LivingEntity living) {
-				PlaceholderVisuals.hit(living);
-			}
+			stopBreaking(player);
+			PlaceholderCombat.attack(player, hit.getEntity());
 			return;
 		}
-		if (player.isCreative()) breakDelay = 0; // fresh presses are instant; held mining keeps its cadence
+		if (player.isCreative()) { // fresh clicks remain immediate; held mining cannot reset either gate
+			breakDelay = 0;
+			nextHeldBreak = 0;
+		}
 		continueAttack(player);
 	}
 

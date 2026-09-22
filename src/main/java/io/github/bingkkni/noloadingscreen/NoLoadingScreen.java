@@ -7,8 +7,6 @@ import io.github.bingkkni.noloadingscreen.gui.LoadingHud;
 import io.github.bingkkni.noloadingscreen.gui.LoadingPauseScreen;
 import io.github.bingkkni.noloadingscreen.mixin.ServerReconfigScreenAccessor;
 import io.github.bingkkni.noloadingscreen.mixin.ConnectScreenAccessor;
-import io.github.bingkkni.noloadingscreen.gui.LoadingInventoryScreen;
-import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.Gui;
 import java.util.ArrayList;
 import java.util.List;
@@ -466,6 +464,7 @@ public final class NoLoadingScreen {
 
 	/** The connection remains ours until login or disconnect, not merely until a screen opens. */
 	public static void tickPlaceholder() {
+		ClientCommands.runPending();
 		Minecraft minecraft = Minecraft.getInstance();
 		tryResourcePlaceholder();
 		completeJoinWhenReady();
@@ -552,7 +551,7 @@ public final class NoLoadingScreen {
 		}
 		// Datapack failures, backup/low-disk warnings and cancellations retain vanilla ownership.
 		if (resourceScreen != null && screen != null && screen != resourceScreen
-			&& !(screen instanceof LevelLoadingScreen || screen instanceof LoadingInventoryScreen || screen instanceof io.github.bingkkni.noloadingscreen.gui.LoadingCreativeInventoryScreen || screen instanceof LoadingPauseScreen || screen instanceof ChatScreen)) {
+			&& !(screen instanceof LevelLoadingScreen || ScreenTransitions.isLocalScreen(screen))) {
 			onDisconnected();
 			return;
 		}
@@ -570,7 +569,8 @@ public final class NoLoadingScreen {
 
 	/** Independent of HUD visibility: includes the real player's missing-chunk safety hold. */
 	public static boolean isLoading() {
-		return NoLoadingScreenConfig.get().enabled && (PlaceholderWorld.active() || phase != JoinPhase.NONE || holdActive);
+		// Turning the setting off from /nls cannot turn a disconnected scene into a live session.
+		return PlaceholderWorld.active() || NoLoadingScreenConfig.get().enabled && (phase != JoinPhase.NONE || holdActive);
 	}
 
 	public static Component blockedMessage(final boolean command) {

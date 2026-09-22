@@ -1,8 +1,8 @@
 # Version Matrix / 版本矩阵
 
-Minecraft **26.1 / 26.1.1 / 26.1.2 share one `26.1.x` release JAR per loader**, compiled against 26.1. Loaders remain separate; 26.2, 26.3 and the older versions retain their own artifacts. The Mod version remains **1.1.0**.
+Minecraft **26.1 / 26.1.1 / 26.1.2 share one `26.1.x` release JAR per loader**, compiled against 26.1. Loaders remain separate; 26.2, 26.3 and the older versions retain their own artifacts. The Mod version is **1.2**.
 
-Minecraft **26.1、26.1.1、26.1.2 在同一加载器下共用一份 `26.1.x` JAR**，以 26.1 为编译基线。不同加载器不能混用；26.2、26.3 和旧版本仍使用各自的产物。Mod 版本保持 **1.1.0**。
+Minecraft **26.1、26.1.1、26.1.2 在同一加载器下共用一份 `26.1.x` JAR**，以 26.1 为编译基线。不同加载器不能混用；26.2、26.3 和旧版本仍使用各自的产物。Mod 版本为 **1.2**。
 
 ## Targets
 
@@ -32,9 +32,9 @@ Run the repository wrapper, selecting one project from the table:
 ./gradlew -p platforms/forge-26.2 build check
 ```
 
-The selected project's `build/libs/` contains `NoLoadingScreen-1.1.0-Loader-Minecraft.jar` and its `-sources.jar`; the 26.1.x projects instead produce the loader-specific `NoLoadingScreen-1.1.0-Loader-26.1.x.jar` named below. Only the main JAR belongs in the game's `mods` directory. Root `./gradlew build` continues to build Fabric 26.2 only. `-Pversion=...` explicitly overrides the Mod version; it is not needed for these builds.
+The selected project's `build/libs/` contains `NoLoadingScreen-1.2-Loader-Minecraft.jar` and its `-sources.jar`; the 26.1.x projects instead produce the loader-specific `NoLoadingScreen-1.2-Loader-26.1.x.jar` named below. Only the main JAR belongs in the game's `mods` directory. Root `./gradlew build` continues to build Fabric 26.2 only. `-Pversion=...` explicitly overrides the Mod version; it is not needed for these builds.
 
-产物统一放在对应项目的 `build/libs/`；游戏只安装不带 `-sources` 的主 JAR。26.1 族的产物为 `NoLoadingScreen-1.1.0-Fabric-26.1.x.jar`、`NoLoadingScreen-1.1.0-NeoForge-26.1.x.jar`、`NoLoadingScreen-1.1.0-Forge-26.1.x.jar`。原 `*-26.1.1`、`*-26.1.2` 独立 Gradle 项目已删除；不要再使用旧构建目录中残留的分版本 JAR。根目录构建入口仍为 Fabric 26.2，不会一次性启动所有加载器工具链。
+产物统一放在对应项目的 `build/libs/`；游戏只安装不带 `-sources` 的主 JAR。26.1 族的产物为 `NoLoadingScreen-1.2-Fabric-26.1.x.jar`、`NoLoadingScreen-1.2-NeoForge-26.1.x.jar`、`NoLoadingScreen-1.2-Forge-26.1.x.jar`。原 `*-26.1.1`、`*-26.1.2` 独立 Gradle 项目已删除；不要再使用旧构建目录中残留的分版本 JAR。根目录构建入口仍为 Fabric 26.2，不会一次性启动所有加载器工具链。
 
 ### Verify the same 26.1.x JAR / 同一产物跨版本验证
 
@@ -44,7 +44,7 @@ Build once with the commands above, then run the existing JAR on each real game/
 for game in 26.1 26.1.1 26.1.2; do
   ./gradlew -p platforms/fabric-26.1 check \
     -PtestMinecraftVersion="$game" \
-    -PverificationJar=build/libs/NoLoadingScreen-1.1.0-Fabric-26.1.x.jar
+    -PverificationJar=build/libs/NoLoadingScreen-1.2-Fabric-26.1.x.jar
 done
 ```
 

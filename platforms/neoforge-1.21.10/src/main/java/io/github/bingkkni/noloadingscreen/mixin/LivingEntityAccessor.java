@@ -8,6 +8,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 /** 1.21.10 ItemInHandRenderer uses attackStrengthTicker for item raise/lower animation. */
 @Mixin(LivingEntity.class)
 public interface LivingEntityAccessor {
+	@Accessor("attackStrengthTicker") int nls$attackStrengthTicker();
+	@Accessor("attackStrengthTicker") void nls$setAttackStrengthTicker(int ticks);
 	@Accessor("attackStrengthTicker") int nls$itemSwapTicker();
 	@Accessor("attackStrengthTicker") void nls$setItemSwapTicker(int ticks);
 	@Invoker("getJumpPower") float nls$jumpPower();

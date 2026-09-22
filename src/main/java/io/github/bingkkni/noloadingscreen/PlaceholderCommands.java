@@ -53,7 +53,7 @@ public final class PlaceholderCommands {
 	}
 
 	public static CompletableFuture<Suggestions> suggest(String text, int cursor) {
-		if (!PlaceholderWorld.active() || !text.startsWith("/")) return Suggestions.empty();
+		if (!PlaceholderWorld.active() || !text.startsWith("/") || cursor < 1 || cursor > text.length()) return Suggestions.empty();
 		StringReader reader = new StringReader(text);
 		reader.skip();
 		return DISPATCHER.getCompletionSuggestions(DISPATCHER.parse(reader, SOURCE), cursor);
