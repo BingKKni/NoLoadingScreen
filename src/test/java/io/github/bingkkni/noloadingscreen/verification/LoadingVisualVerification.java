@@ -633,7 +633,8 @@ final class LoadingVisualVerification {
 		use.setDown(true);
 		PlaceholderWorld.handleSafeKeybinds();
 		check(player.getMainHandItem().getCount() == 7, "Held use cannot place twice inside the four-tick delay");
-		for (int i = 0; i < 4; i++) interaction.tick();
+		// Advance the real placeholder clock, including its owned interaction cooldown.
+		for (int i = 0; i < 4; i++) tickWithVisibleHands(hands, player, 1);
 		PlaceholderWorld.handleSafeKeybinds();
 		check(player.getMainHandItem().getCount() == 6, "Held use repeats after four ticks");
 		use.setDown(false);
